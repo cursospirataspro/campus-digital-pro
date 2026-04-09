@@ -1,0 +1,939 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin — Reproductor Protegido</title>
+    <style>
+        :root {
+            --c-primary: #e63946;
+            --c-primary-h: #ff4d5a;
+            --c-bg: #0a0a0a;
+            --c-surface: #111;
+            --c-surface2: #1a1a1a;
+            --c-border: #2a2a2a;
+            --c-text: #f0f0f0;
+            --c-muted: #777;
+            --c-success: #2ecc71;
+            --c-warn: #f39c12;
+            --c-error: #ff6b6b;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { min-height: 100%; background: var(--c-bg); font-family: 'Segoe UI', Tahoma, sans-serif; color: var(--c-text); }
+
+        /* ---- Layout ---- */
+        #app { display: none; flex-direction: row; min-height: 100vh; }
+        #app.visible { display: flex; }
+
+        /* ---- Sidebar ---- */
+        aside {
+            width: 220px; min-width: 220px;
+            background: var(--c-surface);
+            border-right: 1px solid var(--c-border);
+            display: flex; flex-direction: column;
+            padding: 24px 0;
+        }
+        .sidebar-logo {
+            padding: 0 20px 20px;
+            border-bottom: 1px solid var(--c-border);
+            margin-bottom: 16px;
+        }
+        .sidebar-logo span { color: var(--c-primary); font-weight: 700; font-size: 1rem; }
+        .sidebar-logo small { display: block; color: var(--c-muted); font-size: 0.7rem; margin-top: 2px; }
+        nav a {
+            display: block; padding: 10px 20px;
+            color: var(--c-muted); text-decoration: none;
+            font-size: 0.88rem; border-left: 3px solid transparent;
+            transition: all 0.15s; cursor: pointer;
+        }
+        nav a:hover, nav a.active {
+            color: var(--c-text);
+            border-left-color: var(--c-primary);
+            background: rgba(230,57,70,0.08);
+        }
+        .sidebar-bottom { margin-top: auto; padding: 16px 20px; }
+        #admin-info { font-size: 0.75rem; color: var(--c-muted); margin-bottom: 8px; }
+        #btn-logout-admin {
+            width: 100%; padding: 7px;
+            background: none; border: 1px solid var(--c-border);
+            color: var(--c-muted); border-radius: 5px; cursor: pointer; font-size: 0.8rem;
+        }
+        #btn-logout-admin:hover { border-color: var(--c-primary); color: var(--c-primary); }
+
+        /* ---- Main ---- */
+        main { flex: 1; overflow-y: auto; padding: 32px; }
+        .page { display: none; }
+        .page.active { display: block; }
+        h2 { font-size: 1.3rem; margin-bottom: 6px; }
+        .subtitle { color: var(--c-muted); font-size: 0.83rem; margin-bottom: 24px; }
+
+        /* ---- Cards ---- */
+        .card {
+            background: var(--c-surface); border: 1px solid var(--c-border);
+            border-radius: 10px; padding: 20px; margin-bottom: 20px;
+        }
+        .card h3 { font-size: 0.95rem; margin-bottom: 14px; color: var(--c-muted); text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.75rem; }
+
+        /* ---- Stats grid ---- */
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 24px; }
+        .stat-card {
+            background: var(--c-surface); border: 1px solid var(--c-border);
+            border-radius: 10px; padding: 20px 16px;
+        }
+        .stat-card .num { font-size: 2rem; font-weight: 700; color: var(--c-primary); }
+        .stat-card .lbl { color: var(--c-muted); font-size: 0.78rem; margin-top: 4px; }
+
+        /* ---- Forms ---- */
+        .form-row { margin-bottom: 14px; }
+        .form-row label { display: block; font-size: 0.8rem; color: var(--c-muted); margin-bottom: 5px; }
+        .form-row input, .form-row select {
+            width: 100%; padding: 9px 12px;
+            background: var(--c-surface2); border: 1px solid var(--c-border);
+            border-radius: 6px; color: var(--c-text); font-size: 0.88rem; outline: none;
+        }
+        .form-row input:focus { border-color: var(--c-primary); }
+        .btn { padding: 9px 18px; border: none; border-radius: 6px; font-size: 0.88rem; font-weight: 600; cursor: pointer; transition: background 0.15s; }
+        .btn-red { background: var(--c-primary); color: #fff; }
+        .btn-red:hover { background: var(--c-primary-h); }
+        .btn-ghost { background: var(--c-surface2); color: var(--c-text); border: 1px solid var(--c-border); }
+        .btn-ghost:hover { border-color: var(--c-primary); color: var(--c-primary); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* ---- Drop zone ---- */
+        #drop-zone {
+            border: 2px dashed var(--c-border);
+            border-radius: 10px; padding: 36px 20px;
+            text-align: center; cursor: pointer;
+            transition: border-color 0.2s, background 0.2s;
+            margin-bottom: 14px;
+        }
+        #drop-zone.dragover { border-color: var(--c-primary); background: rgba(230,57,70,0.05); }
+        #drop-zone p { color: var(--c-muted); font-size: 0.88rem; margin-top: 8px; }
+        #drop-zone .icon { font-size: 2.5rem; }
+        #file-name { font-size: 0.82rem; color: var(--c-success); margin-bottom: 8px; min-height: 18px; }
+        #upload-progress { display: none; margin-bottom: 12px; }
+        progress { width: 100%; height: 6px; border-radius: 3px; }
+        progress::-webkit-progress-bar { background: var(--c-border); border-radius: 3px; }
+        progress::-webkit-progress-value { background: var(--c-primary); border-radius: 3px; }
+
+        /* ---- Tables ---- */
+        .table-wrap { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
+        th { text-align: left; padding: 8px 12px; color: var(--c-muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--c-border); }
+        td { padding: 10px 12px; border-bottom: 1px solid var(--c-border); vertical-align: middle; }
+        tr:last-child td { border-bottom: none; }
+        tr:hover td { background: rgba(255,255,255,0.02); }
+        .badge {
+            display: inline-block; padding: 2px 8px; border-radius: 999px;
+            font-size: 0.7rem; font-weight: 600;
+        }
+        .badge-ok      { background: rgba(46,204,113,0.15); color: var(--c-success); }
+        .badge-warn    { background: rgba(243,156,18,0.15); color: var(--c-warn); }
+        .badge-error   { background: rgba(255,107,107,0.15); color: var(--c-error); }
+        .badge-proc    { background: rgba(52,152,219,0.15); color: #3498db; }
+
+        /* ---- Copy link ---- */
+        .copy-link {
+            font-size: 0.75rem; color: var(--c-primary);
+            cursor: pointer; text-decoration: underline;
+        }
+
+        /* ---- Alerts ---- */
+        .alert { padding: 10px 14px; border-radius: 6px; font-size: 0.83rem; margin-bottom: 16px; display: none; }
+        .alert-ok    { background: rgba(46,204,113,0.1); color: var(--c-success); border: 1px solid rgba(46,204,113,0.2); }
+        .alert-error { background: rgba(255,107,107,0.1); color: var(--c-error); border: 1px solid rgba(255,107,107,0.2); }
+
+        /* ---- Login overlay ---- */
+        #login-overlay {
+            position: fixed; inset: 0; z-index: 100;
+            background: var(--c-bg);
+            display: flex; align-items: center; justify-content: center; padding: 16px;
+        }
+        .login-box {
+            background: var(--c-surface); border: 1px solid var(--c-border);
+            border-radius: 12px; padding: 32px 28px; width: 100%; max-width: 380px;
+        }
+        .login-box h2 { color: var(--c-primary); margin-bottom: 4px; }
+        .login-box p { color: var(--c-muted); font-size: 0.83rem; margin-bottom: 20px; }
+
+        /* ---- Detect leak ---- */
+        #leak-result { padding: 12px 14px; background: var(--c-surface2); border-radius: 6px; font-size: 0.83rem; display: none; margin-top: 12px; }
+        #leak-result.found { border-left: 3px solid var(--c-error); }
+        #leak-result.notfound { border-left: 3px solid var(--c-muted); }
+
+        /* ---- Import drop ---- */
+        #import-drop {
+            border: 2px dashed var(--c-border); border-radius: 8px;
+            padding: 22px 16px; text-align: center; cursor: pointer;
+            transition: border-color 0.2s; margin-bottom: 10px;
+        }
+        #import-drop:hover { border-color: var(--c-primary); }
+        #import-drop p { color: var(--c-muted); font-size: 0.82rem; margin-top: 4px; }
+
+        /* ---- Device badge ---- */
+        .device-bound   { color: var(--c-warn);    font-size: 0.72rem; }
+        .device-unbound { color: var(--c-success); font-size: 0.72rem; }
+
+        @media (max-width: 640px) {
+            aside { display: none; }
+            main { padding: 16px; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- ========== LOGIN ========== -->
+<div id="login-overlay">
+    <div class="login-box">
+        <h2>Panel de Administracion</h2>
+        <p>Solo accesible para administradores.</p>
+        <form id="admin-login-form">
+            <div class="form-row">
+                <label>Correo del administrador</label>
+                <input type="email" id="al-user" required maxlength="120" autocomplete="username" placeholder="tu@correo.com">
+            </div>
+            <div class="form-row">
+                <label>Contrasena</label>
+                <input type="password" id="al-pass" required maxlength="128" autocomplete="current-password">
+            </div>
+            <button type="submit" class="btn btn-red" id="btn-admin-login" style="width:100%">Entrar</button>
+            <div class="alert alert-error" id="al-error" style="display:none;margin-top:10px"></div>
+        </form>
+    </div>
+</div>
+
+<!-- ========== APP ========== -->
+<div id="app">
+    <aside>
+        <div class="sidebar-logo">
+            <span>DRM Admin</span>
+            <small>Panel de control</small>
+        </div>
+        <nav>
+            <a class="active" data-page="dashboard">Dashboard</a>
+            <a data-page="upload">Subir Video</a>
+            <a data-page="catalog">Catalogo</a>
+            <a data-page="students">Alumnos</a>
+            <a data-page="audit">Auditoria</a>
+            <a data-page="leak">Detectar Fuga</a>
+        </nav>
+        <div class="sidebar-bottom">
+            <div id="admin-info"></div>
+            <button id="btn-logout-admin">Cerrar sesion</button>
+        </div>
+    </aside>
+
+    <main>
+        <!-- ---- DASHBOARD ---- -->
+        <div class="page active" id="page-dashboard">
+            <h2>Dashboard</h2>
+            <p class="subtitle">Resumen del sistema de proteccion.</p>
+            <div class="stats-grid" id="stats-grid">
+                <div class="stat-card"><div class="num" id="stat-videos">—</div><div class="lbl">Videos procesados</div></div>
+                <div class="stat-card"><div class="num" id="stat-deliveries">—</div><div class="lbl">Entregas registradas</div></div>
+                <div class="stat-card"><div class="num" id="stat-users">—</div><div class="lbl">Usuarios unicos</div></div>
+            </div>
+            <div class="card">
+                <h3>Ultimas reproducciones</h3>
+                <div class="table-wrap">
+                    <table id="recent-table">
+                        <thead><tr><th>Usuario</th><th>VideoId</th><th>IP</th><th>Fecha</th></tr></thead>
+                        <tbody id="recent-body"><tr><td colspan="4" style="color:var(--c-muted)">Cargando...</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- ---- SUBIR VIDEO ---- -->
+        <div class="page" id="page-upload">
+            <h2>Subir Video</h2>
+            <p class="subtitle">Sube un MP4/MOV y el sistema genera automaticamente los segmentos HLS cifrados.</p>
+            <div class="card">
+                <div id="drop-zone">
+                    <div class="icon">🎬</div>
+                    <strong>Arrastra un video aqui</strong>
+                    <p>o haz clic para seleccionar (MP4, MOV, MKV, AVI, WEBM — max 10 GB)</p>
+                    <input type="file" id="file-input" accept=".mp4,.mov,.mkv,.avi,.webm" style="display:none">
+                </div>
+                <div id="file-name"></div>
+                <div class="form-row">
+                    <label>Titulo del video</label>
+                    <input type="text" id="video-title" placeholder="Ej: Leccion 1 - Introduccion" maxlength="120">
+                </div>
+                <div id="upload-progress">
+                    <p style="font-size:0.8rem;color:var(--c-muted);margin-bottom:6px" id="upload-progress-text">Subiendo...</p>
+                    <progress id="progress-bar" value="0" max="100"></progress>
+                </div>
+                <div class="alert alert-ok"  id="upload-success"></div>
+                <div class="alert alert-error" id="upload-error"></div>
+                <button class="btn btn-red" id="btn-upload" disabled>Procesar Video</button>
+            </div>
+        </div>
+
+        <!-- ---- CATALOGO ---- -->
+        <div class="page" id="page-catalog">
+            <h2>Catalogo de Videos</h2>
+            <p class="subtitle">Videos procesados y listos para reproduccion.</p>
+
+            <!-- Agregar video de Bunny.net -->
+            <div class="card" style="margin-bottom:16px">
+                <h3>Agregar video de Bunny.net</h3>
+                <p style="font-size:0.8rem;color:var(--c-muted);margin-bottom:12px">
+                    Pega la URL HLS de Bunny Stream. Ejemplo:<br>
+                    <code style="background:#222;padding:2px 6px;border-radius:3px;font-size:0.78rem">https://vz-XXXXXX.b-cdn.net/VIDEO-ID/playlist.m3u8</code>
+                </p>
+                <div style="display:grid;grid-template-columns:2fr 3fr auto;gap:10px;align-items:end">
+                    <div class="form-row" style="margin:0">
+                        <label>Titulo del video *</label>
+                        <input type="text" id="bunny-title" maxlength="120" placeholder="Ej: Clase 1 &mdash; Introduccion">
+                    </div>
+                    <div class="form-row" style="margin:0">
+                        <label>URL HLS de Bunny.net *</label>
+                        <input type="url" id="bunny-url" placeholder="https://vz-XXXXXX.b-cdn.net/.../.m3u8">
+                    </div>
+                    <button class="btn btn-red" id="btn-add-bunny" style="height:38px">Agregar</button>
+                </div>
+                <span id="bunny-msg" style="font-size:0.8rem;display:block;margin-top:8px"></span>
+            </div>
+
+            <div class="card">
+                <div class="table-wrap">
+                    <table>
+                        <thead><tr><th>Titulo</th><th>ID</th><th>Fuente</th><th>Estado</th><th>Segmentos</th><th>Fecha</th><th>Acciones</th></tr></thead>
+                        <tbody id="catalog-body"><tr><td colspan="7" style="color:var(--c-muted)">Cargando...</td></tr></tbody>
+                    </table>
+                </div>
+                <button class="btn btn-ghost" onclick="loadCatalog()" style="margin-top:14px;font-size:0.8rem">Actualizar</button>
+            </div>
+        </div>
+
+        <!-- ---- ALUMNOS ---- -->
+        <div class="page" id="page-students">
+            <h2>Gestión de Alumnos</h2>
+            <p class="subtitle">Administra quién puede acceder y a qué videos.</p>
+
+            <!-- Agregar alumno manualmente -->
+            <div class="card" style="margin-bottom:16px">
+                <h3>Agregar alumno</h3>
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px">
+                    <div class="form-row" style="margin:0">
+                        <label>Correo electrónico *</label>
+                        <input type="email" id="ns-email" maxlength="120" placeholder="alumno@correo.com">
+                    </div>
+                    <div class="form-row" style="margin:0">
+                        <label>ID de alumno *</label>
+                        <input type="text" id="ns-sid" maxlength="60" placeholder="ALU-001">
+                    </div>
+                    <div class="form-row" style="margin:0">
+                        <label>Nombre (opcional)</label>
+                        <input type="text" id="ns-name" maxlength="100" placeholder="Juan Pérez">
+                    </div>
+                </div>
+                <div class="form-row" style="margin-bottom:12px">
+                    <label>Videos permitidos (deja en blanco para todos, o IDs separados por coma)</label>
+                    <input type="text" id="ns-videos" placeholder="* ó uuid1,uuid2" maxlength="2000">
+                </div>
+                <div style="display:flex;gap:10px;align-items:center">
+                    <button class="btn btn-red" id="btn-add-student">Crear alumno</button>
+                    <span id="add-student-msg" style="font-size:0.8rem"></span>
+                </div>
+            </div>
+
+            <!-- Importar alumnos -->
+            <div class="card" style="margin-bottom:16px">
+                <h3>Importar alumnos</h3>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+                    <!-- CSV -->
+                    <div>
+                        <p style="font-size:0.8rem;color:var(--c-muted);margin-bottom:8px">
+                            <strong>CSV</strong> &mdash; columnas: <code style="background:#222;padding:1px 5px;border-radius:3px">email,studentId,nombre</code>
+                        </p>
+                        <div id="import-drop">
+                            <p>📎 Arrastra un .csv aquí o haz clic</p>
+                            <input type="file" id="csv-file" accept=".csv,.txt" style="display:none">
+                        </div>
+                        <div style="display:flex;gap:8px;align-items:center">
+                            <button class="btn btn-ghost" id="btn-import-csv">Importar CSV</button>
+                            <span id="csv-msg" style="font-size:0.78rem"></span>
+                        </div>
+                    </div>
+                    <!-- JSON -->
+                    <div>
+                        <p style="font-size:0.8rem;color:var(--c-muted);margin-bottom:8px">
+                            <strong>JSON</strong> &mdash; pega un array:
+                            <code style="background:#222;padding:1px 5px;border-radius:3px">[{&quot;email&quot;:&quot;...&quot;,&quot;studentId&quot;:&quot;...&quot;}]</code>
+                        </p>
+                        <textarea id="json-import" rows="4"
+                            style="width:100%;background:var(--c-surface2);border:1px solid var(--c-border);border-radius:6px;color:var(--c-text);font-size:0.78rem;padding:8px;resize:vertical;font-family:monospace"
+                            placeholder='[{"email":"a@b.com","studentId":"ALU-01","name":"Ana"}]'></textarea>
+                        <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+                            <button class="btn btn-ghost" id="btn-import-json">Importar JSON</button>
+                            <span id="json-msg" style="font-size:0.78rem"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tabla de alumnos -->
+            <div class="card">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                    <h3 style="margin:0">Lista de alumnos</h3>
+                    <div style="display:flex;gap:8px">
+                        <input type="text" id="filter-students" placeholder="Buscar email / ID / nombre"
+                            style="padding:6px 10px;background:var(--c-surface2);border:1px solid var(--c-border);border-radius:6px;color:var(--c-text);font-size:0.82rem;outline:none;width:240px">
+                        <button class="btn btn-ghost" onclick="loadStudents()">Actualizar</button>
+                    </div>
+                </div>
+                <div class="table-wrap">
+                    <table>
+                        <thead><tr>
+                            <th>Correo</th><th>ID alumno</th><th>Nombre</th>
+                            <th>Videos</th><th>Dispositivo</th><th>Estado</th><th>Último acceso</th><th>Acciones</th>
+                        </tr></thead>
+                        <tbody id="students-body"><tr><td colspan="8" style="color:var(--c-muted)">Cargando...</td></tr></tbody>
+                    </table>
+                </div>
+                <p id="students-count" style="font-size:0.75rem;color:var(--c-muted);margin-top:8px"></p>
+            </div>
+        </div>
+
+        <!-- ---- AUDITORIA ---- -->
+        <div class="page" id="page-audit">
+            <h2>Log de Auditoria</h2>
+            <p class="subtitle">Registro de cada reproduccion entregada con fingerprint forense.</p>
+            <div class="card" style="margin-bottom:16px">
+                <div style="display:flex;gap:10px;flex-wrap:wrap">
+                    <input type="text" id="filter-userid" placeholder="Filtrar por userId" style="flex:1;min-width:180px;padding:7px 10px;background:var(--c-surface2);border:1px solid var(--c-border);border-radius:6px;color:var(--c-text);font-size:0.83rem;outline:none">
+                    <input type="text" id="filter-videoid" placeholder="Filtrar por videoId" style="flex:1;min-width:180px;padding:7px 10px;background:var(--c-surface2);border:1px solid var(--c-border);border-radius:6px;color:var(--c-text);font-size:0.83rem;outline:none">
+                    <button class="btn btn-ghost" onclick="loadAudit()">Buscar</button>
+                </div>
+            </div>
+            <div class="card">
+                <div class="table-wrap">
+                    <table>
+                        <thead><tr><th>Fingerprint</th><th>Usuario</th><th>VideoId</th><th>Dispositivo</th><th>IP</th><th>Fecha</th></tr></thead>
+                        <tbody id="audit-body"><tr><td colspan="6" style="color:var(--c-muted)">Cargando...</td></tr></tbody>
+                    </table>
+                </div>
+                <p style="font-size:0.75rem;color:var(--c-muted);margin-top:10px" id="audit-count"></p>
+            </div>
+        </div>
+
+        <!-- ---- DETECTAR FUGA ---- -->
+        <div class="page" id="page-leak">
+            <h2>Detectar Fuga</h2>
+            <p class="subtitle">Ingresa el fingerprint visible en un video filtrado para identificar al responsable.</p>
+            <div class="card">
+                <div class="form-row">
+                    <label>Fingerprint extraido del video filtrado (16 caracteres hex)</label>
+                    <input type="text" id="fp-input" placeholder="Ej: a1b2c3d4e5f6a7b8" maxlength="16" style="font-family:monospace;letter-spacing:0.1em">
+                </div>
+                <button class="btn btn-red" onclick="detectLeak()">Investigar</button>
+                <div id="leak-result">
+                    <div id="leak-content"></div>
+                </div>
+            </div>
+            <div class="card" style="margin-top:0">
+                <h3>Como leer la marca de agua</h3>
+                <p style="font-size:0.83rem;color:var(--c-muted);line-height:1.6">
+                    La marca de agua visible en el video tiene el formato <code style="background:#222;padding:2px 6px;border-radius:3px">FP:&lt;fingerprint&gt;</code> seguido del identificador del usuario.
+                    El fingerprint es un codigo hex de 16 caracteres. Copialo aqui para identificar al usuario que filtro el video.
+                    <br><br>
+                    Para marcas de agua <strong>invisibles</strong> (esteganografia), necesitas integrar un servicio como Imatag o Nagra.
+                </p>
+            </div>
+        </div>
+    </main>
+</div>
+
+<script>
+'use strict';
+
+// ================================================================
+//  ESTADO
+// ================================================================
+let TOKEN = null;
+let selectedFile = null;
+
+const $ = id => document.getElementById(id);
+
+function saveToken(t) { sessionStorage.setItem('admin_token', t); }
+function loadToken()  { return sessionStorage.getItem('admin_token'); }
+function clearToken() { sessionStorage.removeItem('admin_token'); }
+
+function parseJwt(t) {
+    try { return JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))); }
+    catch { return {}; }
+}
+
+// ================================================================
+//  AUTH
+// ================================================================
+$('admin-login-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const btn = $('btn-admin-login'), errEl = $('al-error');
+    errEl.style.display = 'none';
+    btn.disabled = true; btn.textContent = 'Verificando...';
+    try {
+        const r = await fetch('/api/auth/admin-login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: $('al-user').value.trim(), password: $('al-pass').value }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Credenciales incorrectas');
+        const payload = parseJwt(d.token);
+        if (!payload.admin) throw new Error('Esta cuenta no tiene permisos de administrador');
+        TOKEN = d.token;
+        saveToken(TOKEN);
+        $('al-pass').value = '';
+        showApp(payload);
+    } catch (err) {
+        errEl.textContent = err.message; errEl.style.display = 'block';
+    } finally { btn.disabled = false; btn.textContent = 'Entrar'; }
+});
+
+$('btn-logout-admin').addEventListener('click', () => {
+    clearToken(); TOKEN = null;
+    $('app').classList.remove('visible');
+    $('login-overlay').style.display = 'flex';
+});
+
+function showApp(payload) {
+    $('login-overlay').style.display = 'none';
+    $('app').classList.add('visible');
+    $('admin-info').textContent = 'Sesion: ' + (payload.username || '');
+    loadDashboard();
+}
+
+// ================================================================
+//  NAVEGACION
+// ================================================================
+document.querySelectorAll('nav a').forEach(a => {
+    a.addEventListener('click', () => {
+        document.querySelectorAll('nav a').forEach(x => x.classList.remove('active'));
+        document.querySelectorAll('.page').forEach(x => x.classList.remove('active'));
+        a.classList.add('active');
+        $('page-' + a.dataset.page).classList.add('active');
+        if (a.dataset.page === 'catalog')   loadCatalog();
+        if (a.dataset.page === 'audit')     loadAudit();
+        if (a.dataset.page === 'dashboard') loadDashboard();
+        if (a.dataset.page === 'students')  loadStudents();
+    });
+});
+
+// ================================================================
+//  API HELPER
+// ================================================================
+async function api(method, path, body) {
+    const opts = { method, headers: { Authorization: 'Bearer ' + TOKEN } };
+    if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
+    const r = await fetch(path, opts);
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || r.status);
+    return d;
+}
+
+// ================================================================
+//  DASHBOARD
+// ================================================================
+async function loadDashboard() {
+    try {
+        const [catalogData, auditData] = await Promise.all([
+            api('GET', '/api/video/catalog'),
+            api('GET', '/api/audit/log?limit=200'),
+        ]);
+        const catalog = catalogData.catalog || [];
+        const entries = auditData.entries || [];
+        $('stat-videos').textContent    = catalog.filter(v => v.status === 'ready').length;
+        $('stat-deliveries').textContent = entries.length;
+        const users = new Set(entries.map(e => e.userId));
+        $('stat-users').textContent = users.size;
+        const tbody = $('recent-body');
+        const recent = entries.slice(0, 10);
+        if (!recent.length) { tbody.innerHTML = '<tr><td colspan="4" style="color:var(--c-muted)">Sin registros aun</td></tr>'; return; }
+        tbody.innerHTML = recent.map(e =>
+            `<tr><td>${esc(e.userId.slice(0,8)+'...')}</td><td>${esc(e.videoId.slice(0,8)+'...')}</td><td style="font-size:0.72rem;font-family:monospace">${esc((e.deviceId||e.ip||'—').slice(0,16))}</td><td>${new Date(e.deliveredAt).toLocaleString()}</td></tr>`
+        ).join('');
+    } catch (err) { console.error(err); }
+}
+
+// ================================================================
+//  SUBIDA DE VIDEO
+// ================================================================
+const dropZone  = $('drop-zone');
+const fileInput = $('file-input');
+
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e => {
+    e.preventDefault(); dropZone.classList.remove('dragover');
+    const f = e.dataTransfer.files[0];
+    if (f) setFile(f);
+});
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) setFile(fileInput.files[0]); });
+
+function setFile(f) {
+    selectedFile = f;
+    $('file-name').textContent = f.name + ' (' + (f.size / 1024 / 1024).toFixed(1) + ' MB)';
+    $('btn-upload').disabled = false;
+    if (!$('video-title').value) $('video-title').value = f.name.replace(/\.[^.]+$/, '');
+}
+
+$('btn-upload').addEventListener('click', async () => {
+    if (!selectedFile) return;
+    const btn = $('btn-upload');
+    const successEl = $('upload-success'), errorEl = $('upload-error');
+    successEl.style.display = errorEl.style.display = 'none';
+    btn.disabled = true; btn.textContent = 'Subiendo...';
+    $('upload-progress').style.display = 'block';
+
+    const formData = new FormData();
+    formData.append('video', selectedFile);
+    formData.append('title', $('video-title').value || selectedFile.name);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/video/upload');
+    xhr.setRequestHeader('Authorization', 'Bearer ' + TOKEN);
+
+    xhr.upload.onprogress = e => {
+        if (e.lengthComputable) {
+            const pct = Math.round((e.loaded / e.total) * 100);
+            $('progress-bar').value = pct;
+            $('upload-progress-text').textContent = `Subiendo... ${pct}%`;
+        }
+    };
+
+    xhr.onload = () => {
+        $('upload-progress').style.display = 'none';
+        btn.textContent = 'Procesar Video';
+        try {
+            const d = JSON.parse(xhr.responseText);
+            if (xhr.status === 200) {
+                successEl.textContent = 'Video recibido. ID: ' + d.videoId + '. El procesamiento FFmpeg esta en curso (puede tardar varios minutos segun la duracion del video).';
+                successEl.style.display = 'block';
+                selectedFile = null; $('file-name').textContent = ''; $('video-title').value = '';
+                btn.disabled = true;
+            } else {
+                errorEl.textContent = d.error || 'Error desconocido'; errorEl.style.display = 'block';
+                btn.disabled = false;
+            }
+        } catch { errorEl.textContent = 'Error al procesar la respuesta'; errorEl.style.display = 'block'; btn.disabled = false; }
+    };
+    xhr.onerror = () => {
+        $('upload-progress').style.display = 'none';
+        errorEl.textContent = 'Error de red al subir el archivo'; errorEl.style.display = 'block';
+        btn.disabled = false; btn.textContent = 'Procesar Video';
+    };
+
+    xhr.send(formData);
+});
+
+// ================================================================
+//  CATALOGO
+// ================================================================
+async function loadCatalog() {
+    const tbody = $('catalog-body');
+    tbody.innerHTML = '<tr><td colspan="7" style="color:var(--c-muted)">Cargando...</td></tr>';
+    try {
+        const { catalog } = await api('GET', '/api/video/catalog');
+        if (!catalog.length) { tbody.innerHTML = '<tr><td colspan="7" style="color:var(--c-muted)">No hay videos aun. Sube uno o agrega un link de Bunny.net.</td></tr>'; return; }
+        const base = window.location.origin;
+        tbody.innerHTML = catalog.map(v => {
+            const badge = v.status === 'ready'      ? '<span class="badge badge-ok">Listo</span>'
+                        : v.status === 'processing' ? '<span class="badge badge-proc">Procesando</span>'
+                        : '<span class="badge badge-error">Error</span>';
+            const srcBadge = v.sourceType === 'bunny'
+                ? '<span style="background:#f97316;color:#fff;padding:2px 7px;border-radius:4px;font-size:0.7rem;font-weight:600">Bunny</span>'
+                : '<span style="background:#334155;color:#94a3b8;padding:2px 7px;border-radius:4px;font-size:0.7rem">Local</span>';
+            const link = v.status === 'ready'
+                ? `<span class="copy-link" onclick="copyText('${esc(base + '/?v=' + v.videoId)}')" style="cursor:pointer">Copiar enlace</span>`
+                : '—';
+            const segs = v.sourceType === 'bunny' ? '—' : (v.segmentCount || '—');
+            return `<tr>
+                <td>${esc(v.title || v.videoId)}</td>
+                <td style="font-family:monospace;font-size:0.75rem">${esc(v.videoId.slice(0,8)+'...')}</td>
+                <td>${srcBadge}</td>
+                <td>${badge}</td>
+                <td>${segs}</td>
+                <td>${new Date(v.uploadedAt).toLocaleDateString()}</td>
+                <td>${link} <button class="btn btn-ghost" style="padding:3px 8px;font-size:0.7rem;margin-left:6px" onclick="deleteVideo('${esc(v.videoId)}')">Eliminar</button></td>
+            </tr>`;
+        }).join('');
+    } catch (err) { tbody.innerHTML = `<tr><td colspan="7" style="color:var(--c-error)">${esc(err.message)}</td></tr>`; }
+}
+
+async function addBunnyVideo() {
+    const title = ($('bunny-title').value || '').trim();
+    const bunnyUrl = ($('bunny-url').value || '').trim();
+    const msg = $('bunny-msg');
+    if (!title) { msg.textContent = 'El titulo es requerido'; msg.style.color = 'var(--c-error)'; return; }
+    if (!bunnyUrl) { msg.textContent = 'La URL de Bunny es requerida'; msg.style.color = 'var(--c-error)'; return; }
+    msg.textContent = 'Verificando URL...';
+    msg.style.color = 'var(--c-muted)';
+    $('btn-add-bunny').disabled = true;
+    try {
+        const result = await api('POST', '/api/catalog/add-bunny', { title, bunnyUrl });
+        msg.textContent = `Video agregado correctamente (ID: ${result.videoId.slice(0,8)}...)`;
+        msg.style.color = 'var(--c-ok)';
+        $('bunny-title').value = '';
+        $('bunny-url').value = '';
+        loadCatalog();
+    } catch (err) {
+        msg.textContent = 'Error: ' + err.message;
+        msg.style.color = 'var(--c-error)';
+    } finally {
+        $('btn-add-bunny').disabled = false;
+    }
+}
+
+async function deleteVideo(videoId) {
+    if (!confirm('Eliminar video ' + videoId + '? Esta accion no se puede deshacer.')) return;
+    try {
+        await api('DELETE', '/api/video/' + videoId);
+        loadCatalog();
+    } catch (err) { alert('Error: ' + err.message); }
+}
+
+// ================================================================
+//  ALUMNOS
+// ================================================================
+let allStudents = [];
+
+async function loadStudents() {
+    const tbody = $('students-body'), countEl = $('students-count');
+    tbody.innerHTML = '<tr><td colspan="8" style="color:var(--c-muted)">Cargando...</td></tr>';
+    try {
+        const { students } = await api('GET', '/api/students');
+        allStudents = students || [];
+        renderStudents();
+    } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="8" style="color:var(--c-error)">${esc(err.message)}</td></tr>`;
+    }
+}
+
+function renderStudents() {
+    const filter = ($('filter-students') ? $('filter-students').value.toLowerCase() : '');
+    const tbody = $('students-body'), countEl = $('students-count');
+    let list = allStudents;
+    if (filter) list = list.filter(s =>
+        s.email.toLowerCase().includes(filter) ||
+        s.studentId.toLowerCase().includes(filter) ||
+        (s.name || '').toLowerCase().includes(filter)
+    );
+    $('students-count').textContent = list.length + ' / ' + allStudents.length + ' alumnos';
+    if (!list.length) {
+        tbody.innerHTML = '<tr><td colspan="8" style="color:var(--c-muted)">Sin alumnos. Usa el formulario de arriba para agregar.</td></tr>';
+        return;
+    }
+    tbody.innerHTML = list.map(s => {
+        const deviceBadge = s.deviceId
+            ? `<span class="device-bound" title="${esc(s.deviceId)}">&#128274; Vinculado</span>`
+            : `<span class="device-unbound">&#128275; Libre</span>`;
+        const activeBadge = s.active
+            ? '<span class="badge badge-ok">Activo</span>'
+            : '<span class="badge badge-error">Inactivo</span>';
+        const videos = (s.allowedVideos || ['*']).includes('*') ? 'Todos' :
+            (s.allowedVideos || []).length + ' video(s)';
+        const lastLogin = s.lastLogin ? new Date(s.lastLogin).toLocaleString() : '—';
+        return `<tr>
+            <td>${esc(s.email)}</td>
+            <td style="font-family:monospace">${esc(s.studentId)}</td>
+            <td>${esc(s.name || '—')}</td>
+            <td>${esc(videos)}</td>
+            <td>${deviceBadge}</td>
+            <td>${activeBadge}</td>
+            <td style="font-size:0.75rem">${lastLogin}</td>
+            <td style="white-space:nowrap">
+                <button class="btn btn-ghost" style="padding:3px 7px;font-size:0.7rem"
+                    onclick="toggleStudent('${esc(s.id)}',${!s.active})">${s.active ? 'Desactivar' : 'Activar'}</button>
+                ${s.deviceId ? `<button class="btn btn-ghost" style="padding:3px 7px;font-size:0.7rem;margin-left:4px"
+                    onclick="resetDevice('${esc(s.id)}')">Reset disp.</button>` : ''}
+                <button class="btn btn-ghost" style="padding:3px 7px;font-size:0.7rem;margin-left:4px;border-color:#ff6b6b;color:#ff6b6b"
+                    onclick="deleteStudent('${esc(s.id)}','${esc(s.email)}')">Eliminar</button>
+            </td>
+        </tr>`;
+    }).join('');
+}
+
+$('filter-students') && $('filter-students').addEventListener('input', renderStudents);
+
+// --- Agregar video Bunny.net ---
+$('btn-add-bunny').addEventListener('click', addBunnyVideo);
+
+// --- Agregar alumno ---
+$('btn-add-student').addEventListener('click', async () => {
+    const msgEl = $('add-student-msg');
+    const email = $('ns-email').value.trim();
+    const studentId = $('ns-sid').value.trim();
+    const name = $('ns-name').value.trim();
+    const rawVideos = $('ns-videos').value.trim();
+    const allowedVideos = rawVideos === '' || rawVideos === '*'
+        ? ['*']
+        : rawVideos.split(',').map(v => v.trim()).filter(Boolean);
+
+    if (!email || !studentId) { msgEl.style.color='var(--c-error)'; msgEl.textContent='Email e ID son requeridos.'; return; }
+    msgEl.textContent = 'Creando...'; msgEl.style.color = 'var(--c-muted)';
+    try {
+        await api('POST', '/api/students', { email, studentId, name, allowedVideos });
+        $('ns-email').value = $('ns-sid').value = $('ns-name').value = $('ns-videos').value = '';
+        msgEl.style.color = 'var(--c-success)'; msgEl.textContent = 'Alumno creado.';
+        loadStudents();
+    } catch (err) { msgEl.style.color = 'var(--c-error)'; msgEl.textContent = err.message; }
+});
+
+// --- Toggle activo ---
+async function toggleStudent(id, active) {
+    try { await api('PUT', '/api/students/' + id, { active }); loadStudents(); }
+    catch (err) { alert('Error: ' + err.message); }
+}
+
+// --- Reset dispositivo ---
+async function resetDevice(id) {
+    if (!confirm('¿Desvincular el dispositivo de este alumno? Podrá iniciar sesión desde cualquier equipo hasta que se vincule de nuevo.')) return;
+    try { await api('PUT', '/api/students/' + id, { resetDevice: true }); loadStudents(); }
+    catch (err) { alert('Error: ' + err.message); }
+}
+
+// --- Eliminar alumno ---
+async function deleteStudent(id, email) {
+    if (!confirm('¿Eliminar al alumno ' + email + '? Esta acción no se puede deshacer.')) return;
+    try { await api('DELETE', '/api/students/' + id); loadStudents(); }
+    catch (err) { alert('Error: ' + err.message); }
+}
+
+// --- Importar CSV ---
+const importDrop = $('import-drop');
+const csvFileInput = $('csv-file');
+importDrop.addEventListener('click', () => csvFileInput.click());
+importDrop.addEventListener('dragover', e => { e.preventDefault(); importDrop.style.borderColor='var(--c-primary)'; });
+importDrop.addEventListener('dragleave', () => importDrop.style.borderColor='');
+importDrop.addEventListener('drop', e => {
+    e.preventDefault(); importDrop.style.borderColor = '';
+    const f = e.dataTransfer.files[0]; if (f) { csvFileInput._selected = f; $('csv-msg').textContent = f.name; }
+});
+csvFileInput.addEventListener('change', () => {
+    if (csvFileInput.files[0]) { csvFileInput._selected = csvFileInput.files[0]; $('csv-msg').textContent = csvFileInput.files[0].name; }
+});
+
+$('btn-import-csv').addEventListener('click', async () => {
+    const msgEl = $('csv-msg');
+    const file = csvFileInput._selected || csvFileInput.files[0];
+    if (!file) { msgEl.style.color='var(--c-error)'; msgEl.textContent='Selecciona un archivo CSV.'; return; }
+    msgEl.style.color='var(--c-muted)'; msgEl.textContent='Importando...';
+    const fd = new FormData(); fd.append('csv', file);
+    try {
+        const r = await fetch('/api/students/import-csv', { method: 'POST', headers: { Authorization: 'Bearer ' + TOKEN }, body: fd });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || r.status);
+        msgEl.style.color='var(--c-success)';
+        msgEl.textContent = `+${d.added} agregados, ${d.skipped} omitidos. Total: ${d.total}.`;
+        if (d.errors && d.errors.length) console.warn('CSV errors:', d.errors);
+        loadStudents();
+    } catch (err) { msgEl.style.color='var(--c-error)'; msgEl.textContent=err.message; }
+});
+
+// --- Importar JSON ---
+$('btn-import-json').addEventListener('click', async () => {
+    const msgEl = $('json-msg'), raw = $('json-import').value.trim();
+    if (!raw) { msgEl.style.color='var(--c-error)'; msgEl.textContent='Pega el JSON primero.'; return; }
+    let students;
+    try { students = JSON.parse(raw); } catch { msgEl.style.color='var(--c-error)'; msgEl.textContent='JSON inválido.'; return; }
+    if (!Array.isArray(students)) students = [students];
+    msgEl.style.color='var(--c-muted)'; msgEl.textContent='Importando...';
+    try {
+        const d = await api('POST', '/api/students/import-json', { students });
+        msgEl.style.color='var(--c-success)';
+        msgEl.textContent = `+${d.added} agregados, ${d.skipped} omitidos. Total: ${d.total}.`;
+        $('json-import').value = '';
+        loadStudents();
+    } catch (err) { msgEl.style.color='var(--c-error)'; msgEl.textContent=err.message; }
+});
+
+// ================================================================
+//  AUDITORIA
+// ================================================================
+async function loadAudit() {
+    const tbody = $('audit-body');
+    tbody.innerHTML = '<tr><td colspan="5" style="color:var(--c-muted)">Cargando...</td></tr>';
+    const userId  = $('filter-userid').value.trim();
+    const videoId = $('filter-videoid').value.trim();
+    let url = '/api/audit/log?limit=500';
+    if (userId)  url += '&userId='  + encodeURIComponent(userId);
+    if (videoId) url += '&videoId=' + encodeURIComponent(videoId);
+    try {
+        const { entries, total } = await api('GET', url);
+        $('audit-count').textContent = total + ' registros';
+        if (!entries.length) { tbody.innerHTML = '<tr><td colspan="5" style="color:var(--c-muted)">Sin resultados</td></tr>'; return; }
+        tbody.innerHTML = entries.map(e =>
+            `<tr>
+                <td style="font-family:monospace;font-size:0.78rem">${esc(e.fingerprint)}</td>
+                <td>${esc(e.userId)}</td>
+                <td style="font-family:monospace;font-size:0.75rem">${esc(e.videoId.slice(0,8)+'...')}</td>
+                <td style="font-size:0.72rem;font-family:monospace">${esc((e.deviceId||'—').slice(0,16))}</td>
+                <td>${esc(e.ip)}</td>
+                <td>${new Date(e.deliveredAt).toLocaleString()}</td>
+            </tr>`
+        ).join('');
+    } catch (err) { tbody.innerHTML = `<tr><td colspan="5" style="color:var(--c-error)">${esc(err.message)}</td></tr>`; }
+}
+
+// ================================================================
+//  DETECTAR FUGA
+// ================================================================
+async function detectLeak() {
+    const fp = $('fp-input').value.trim().toLowerCase();
+    const resultEl = $('leak-result'), contentEl = $('leak-content');
+    if (!/^[0-9a-f]{16}$/.test(fp)) {
+        resultEl.className = 'notfound'; resultEl.style.display = 'block';
+        contentEl.textContent = 'El fingerprint debe tener exactamente 16 caracteres hexadecimales.';
+        return;
+    }
+    contentEl.textContent = 'Buscando...'; resultEl.style.display = 'block';
+    try {
+        const match = await api('GET', '/api/watermark/detect?fp=' + fp);
+        resultEl.className = 'leak-result found';
+        contentEl.innerHTML = `
+            <strong style="color:var(--c-error)">FUGA DETECTADA</strong><br><br>
+            <b>Usuario ID:</b> ${esc(match.userId)}<br>
+            <b>Video ID:</b>   ${esc(match.videoId)}<br>
+            <b>Dispositivo:</b> ${esc(match.deviceId || '—')}<br>
+            <b>IP:</b>         ${esc(match.ip)}<br>
+            <b>Agente:</b>     ${esc(match.userAgent)}<br>
+            <b>Fecha:</b>      ${new Date(match.deliveredAt).toLocaleString()}
+        `;
+    } catch (err) {
+        resultEl.className = 'leak-result notfound';
+        contentEl.textContent = err.message.includes('404') ? 'Fingerprint no encontrado en el log de entregas.' : 'Error: ' + err.message;
+    }
+}
+
+// ================================================================
+//  UTILIDADES
+// ================================================================
+function esc(str) {
+    return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function copyText(text) {
+    navigator.clipboard.writeText(text).then(() => alert('Enlace copiado: ' + text)).catch(() => prompt('Copia este enlace:', text));
+}
+
+// ================================================================
+//  ARRANQUE
+// ================================================================
+(function init() {
+    const saved = loadToken();
+    if (saved) {
+        const p = parseJwt(saved);
+        if (p.exp && p.exp * 1000 > Date.now() && p.admin) {
+            TOKEN = saved;
+            showApp(p);
+            return;
+        }
+        clearToken();
+    }
+})();
+</script>
+</body>
+</html>

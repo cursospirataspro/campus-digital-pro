@@ -1,0 +1,11 @@
+node_modules/
+*.log
+.env
+data/
+public/hls/
+public/uploads/
+*.db
+*.db-shm
+*.db-wal
+videoplayer_latest.txt
+app_raw.json

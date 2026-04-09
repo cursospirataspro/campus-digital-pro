@@ -1,0 +1,145 @@
+CÓMO EL REPRODUCTOR DECODIFICA LOS LINKS CIFRADOS
+====================================================
+
+
+PASO 1 — El servidor entrega el manifest como JSON, no como m3u8
+-----------------------------------------------------------------
+Cuando HLS.js pide el manifest, el servidor no devuelve texto m3u8 directo.
+Devuelve esto:
+
+    { "d": "I0VYVE0zVQojRVhULVgtVkVSU0lPTjozCg..." }
+
+El campo "d" es el manifest m3u8 real codificado en Base64url.
+Un descargador que intercepte esta respuesta solo ve JSON con datos en Base64
+— no reconoce ningún patrón HLS, no sabe que hay un video ahí.
+
+
+PASO 2 — Solo el reproductor tiene el SecureLoader
+---------------------------------------------------
+HLS.js normalmente espera recibir texto m3u8 directamente. Para que funcione
+con el JSON, el reproductor tiene una clase personalizada llamada SecureLoader
+que reemplaza al loader por defecto de HLS.js:
+
+    class SecureLoader {
+        load(context, config, callbacks) {
+            this._inner.load(context, config, {
+                ...callbacks,
+                onSuccess(response, stats, ctx, net) {
+                    try {
+                        const j = JSON.parse(response.data);
+                        if (j && j.d) {
+                            response.data = atob(j.d.replace(/-/g,'+').replace(/_/g,'/'));
+                        }
+                    } catch {}
+                    origSuccess(response, stats, ctx, net);
+                }
+            });
+        }
+    }
+
+Lo que hace: intercepta la respuesta JSON, extrae el campo "d", lo decodifica
+de Base64url a texto plano m3u8, y se lo entrega a HLS.js como si nada.
+HLS.js nunca sabe que hubo JSON.
+
+Un descargador externo no tiene este SecureLoader. Recibe el JSON y no sabe
+qué hacer con él.
+
+
+PASO 3 — Las URLs dentro del manifest también están cifradas
+------------------------------------------------------------
+Cuando el SecureLoader decodifica el manifest, el m3u8 resultante no tiene
+URLs normales. En lugar de:
+
+    https://cdn.bunny.net/video/segmento001.ts
+
+Tiene esto:
+
+    http://tuservidor.com/api/b/<uuid>?seg=aHR0cHM6Ly92ei00Yjc5Z...&enc=0
+
+El parámetro seg= es la URL real de Bunny codificada en Base64url.
+El servidor es el único que sabe decodificarla — el cliente nunca ve la URL real.
+
+
+PASO 4 — Cada petición requiere el token en el header
+------------------------------------------------------
+El SecureLoader configura el xhrSetup de HLS.js para que cada petición
+al servidor lleve el token:
+
+    xhrSetup(xhr, url) {
+        if (url.includes('/api/r/') || url.includes('/api/b/') || url.includes('/api/drm/')) {
+            xhr.setRequestHeader('Authorization', 'Bearer ' + mediaToken);
+        }
+    }
+
+Un descargador que copie las URLs del manifest decodificado y las intente
+abrir en otra pestaña o en VLC → 401 inmediato porque no tiene el header
+Authorization.
+
+
+PASO 5 — La clave de descifrado también requiere token
+------------------------------------------------------
+El manifest incluye una línea:
+
+    #EXT-X-KEY:METHOD=AES-128,URI="http://tuservidor.com/api/drm/proxy-key?k=<base64>"
+
+HLS.js la pide automáticamente para descifrar los segmentos, y el xhrSetup
+le añade el token. Si alguien intenta abrir esa URL directamente sin token
+→ 401. Sin la clave, los segmentos descargados son bytes inútiles.
+
+
+RESUMEN DEL FLUJO COMPLETO
+--------------------------
+
+    HLS.js pide manifest
+            ↓
+    SecureLoader intercepta → JSON con Base64url
+            ↓
+    SecureLoader decodifica → m3u8 real (solo en RAM)
+            ↓
+    HLS.js ve URLs /api/b/?seg=Base64 (nunca la URL real de Bunny)
+            ↓
+    HLS.js pide clave → /api/drm/proxy-key + Bearer token → servidor devuelve clave
+            ↓
+    HLS.js pide segmento → /api/b/ + Bearer token → servidor decodifica Base64,
+                           busca en Bunny, reenvía
+            ↓
+    HLS.js descifra con la clave y reproduce
+
+Un descargador externo se queda en el primer paso:
+recibe JSON, no entiende nada, no puede continuar.
+
+
+SISTEMA ANTIDESCARGAS COMPLETO
+================================
+
+1. El manifest no parece HLS
+   → Llega como application/json con contenido en Base64url
+   → Las extensiones buscan application/vnd.apple.mpegurl — no encuentran nada
+
+2. Los segmentos no parecen video
+   → Content-Type: application/octet-stream
+   → Sin extensión .ts, sin nombre reconocible
+
+3. Las URLs no son reconocibles
+   → /api/r/<uuid>?sub=<base64>
+   → /api/b/<uuid>?seg=<base64>&enc=0
+
+4. Todo requiere token
+   → Sin Authorization: Bearer <token> → 401
+   → Token dura 5 minutos, específico para un video
+
+5. La URL real de Bunny nunca sale del servidor
+   → Vive solo en la base de datos SQLite
+   → El cliente nunca la ve
+
+6. La clave AES-128 está protegida
+   → Solo se sirve con token válido
+   → Sin clave los segmentos descargados son datos inútiles
+
+7. Si graba la pantalla queda marcado
+   → El device ID aparece visible en el video grabado
+   → Se puede identificar el dispositivo de origen
+
+LO QUE NO SE PUEDE EVITAR EN NINGÚN REPRODUCTOR DEL MUNDO:
+   → Grabar la pantalla con OBS u otro software de captura
+   → Para eso existe la marca de agua con el device ID
