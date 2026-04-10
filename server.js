@@ -62,13 +62,26 @@ const findStudentByEmail = (email) => db.findStudentByEmail(email);
 const SAFE_BUNNY_RE = /^https:\/\/[a-z0-9-]+\.(?:b-cdn\.net|bunnycdn\.com|mediadelivery\.net)\//i;
 function isSafeBunnyUrl(url) { return SAFE_BUNNY_RE.test(url); }
 
-/** Resuelve una URL relativa a una URL base */
+/** Resuelve una URL relativa a una URL base.
+ *  Preserva el prefijo de token Bunny CDN (bcdn_token=...) si existe en base. */
 function resolveUrl(base, relative) {
     if (/^https?:\/\//.test(relative)) return relative;
-    const u = new URL(base);
-    if (relative.startsWith('/')) return u.origin + relative;
-    const dir = u.pathname.substring(0, u.pathname.lastIndexOf('/') + 1);
-    return u.origin + dir + relative;
+    try {
+        const resolved = new URL(relative, base);
+        // Bunny CDN pone la auth como prefijo del path: /bcdn_token=...&expires=.../
+        // Si base tiene ese prefijo y la URL resuelta lo perdió, restaurarlo
+        const baseUrl = new URL(base);
+        const tokenMatch = baseUrl.pathname.match(/^(\/bcdn_token=[^/]+\/)/);
+        if (tokenMatch && !resolved.pathname.startsWith('/bcdn_token=')) {
+            resolved.pathname = tokenMatch[1] + resolved.pathname.replace(/^\//, '');
+        }
+        return resolved.href;
+    } catch {
+        const u = new URL(base);
+        if (relative.startsWith('/')) return u.origin + relative;
+        const dir = u.pathname.substring(0, u.pathname.lastIndexOf('/') + 1);
+        return u.origin + dir + relative;
+    }
 }
 
 /** Descarga una URL remota (texto). Sigue hasta 1 redirección. */
