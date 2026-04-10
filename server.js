@@ -127,6 +127,17 @@ const JWT_EXPIRES = process.env.JWT_EXPIRES_IN || '2h';
 const MEDIA_TTL      = parseInt(process.env.MEDIA_TOKEN_TTL || '300', 10);
 const MAX_CONCURRENT = parseInt(process.env.MAX_CONCURRENT_SESSIONS || '1', 10);
 
+/**
+ * Resuelve la URL base pública del servidor.
+ * Prioriza PUBLIC_URL del .env; si no existe, la deduce del request.
+ */
+function getPublicBase(req) {
+    if (process.env.PUBLIC_URL) return process.env.PUBLIC_URL.replace(/\/+$/, '');
+    const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+    const host  = req.headers['x-forwarded-host']  || req.headers['host'] || `localhost:${PORT}`;
+    return `${proto}://${host}`;
+}
+
 if (!JWT_SECRET || JWT_SECRET.length < 32) {
     console.error('[FATAL] JWT_SECRET no configurado o demasiado corto. Edita .env');
     process.exit(1);
@@ -163,7 +174,10 @@ app.use((req, res, next) => {
 
 app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    // Permitir iframe desde Base44 y dominio propio (NO usar SAMEORIGIN que bloquea embeds)
+    res.setHeader('Content-Security-Policy',
+        "frame-ancestors 'self' https://campusdigitalpro.com https://www.campusdigitalpro.com https://*.base44.com https://*.base44.app"
+    );
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Permissions-Policy', 'camera=(), microphone=()');
     // Deshabilitar caché para rutas de API y DRM
@@ -581,7 +595,7 @@ app.post('/api/video/upload', requireAdmin, upload.single('video'), async (req, 
     // Responder de inmediato y procesar en segundo plano
     res.json({ videoId, status: 'processing', message: '¡Video recibido! El procesamiento HLS comenzó en segundo plano.' });
 
-    const base = process.env.PUBLIC_URL || `http://localhost:${PORT}`;
+    const base = getPublicBase(req);
     try {
         const result = await processVideo(localPath, videoId, base);
         db.updateCatalogEntry({ videoId, status: 'ready', segmentCount: result.segmentCount, keyId: result.keyId });
@@ -818,7 +832,7 @@ app.get('/api/r/:videoId', async (req, res) => {
     const { videoId } = req.params;
     if (!/^[0-9a-f-]{36}$/i.test(videoId)) return res.status(400).send('videoId inválido');
 
-    const base = process.env.PUBLIC_URL || `http://localhost:${PORT}`;
+    const base = getPublicBase(req);
 
     // ====== MODO BUNNY.NET ================================================
     // La URL del manifest viene de la BD. Se proxea reescribiendo
