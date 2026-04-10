@@ -353,6 +353,42 @@ module.exports.deleteCatalogEntry = (videoId) =>
     stmts.deleteCatalog.run(videoId);
 
 // ================================================================
+//  SEED DE CATÁLOGO DESDE ENV VAR
+//  Si CATALOG_SEED=<JSON> está definido, inserta los videos que
+//  no existan aún. Permite sobrevivir reinicios en Render free tier.
+//  Formato: JSON array de objetos con los mismos campos de addToCatalog.
+// ================================================================
+(function seedCatalogFromEnv() {
+    const raw = process.env.CATALOG_SEED;
+    if (!raw) return;
+    let entries;
+    try { entries = JSON.parse(raw); } catch { console.error('[db] CATALOG_SEED JSON inválido'); return; }
+    if (!Array.isArray(entries)) return;
+    for (const e of entries) {
+        if (!e.videoId || !e.bunnyUrl) continue;
+        const existing = stmts.getCatalogById.get(e.videoId);
+        if (!existing) {
+            try {
+                stmts.insertCatalog.run({
+                    video_id:      e.videoId,
+                    title:         e.title || e.videoId,
+                    status:        e.status || 'ready',
+                    segment_count: e.segmentCount || 0,
+                    key_id:        e.keyId || null,
+                    error:         null,
+                    uploaded_at:   e.uploadedAt || new Date().toISOString(),
+                    source_type:   e.sourceType || 'bunny',
+                    bunny_url:     e.bunnyUrl,
+                });
+                console.log('[db] Catálogo seed:', e.videoId, e.title);
+            } catch (err) {
+                console.error('[db] Error en seed:', err.message);
+            }
+        }
+    }
+})();
+
+// ================================================================
 //  API — SESIONES ACTIVAS
 // ================================================================
 

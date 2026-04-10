@@ -603,6 +603,16 @@ app.get('/api/video/catalog', requireAdmin, (req, res) => {
 });
 
 /**
+ * GET /api/video/catalog/export-seed  [ADMIN]
+ * Devuelve el catálogo en formato JSON listo para pegar en CATALOG_SEED.
+ * Permite persistir el catálogo entre reinicios de Render.
+ */
+app.get('/api/video/catalog/export-seed', requireAdmin, (req, res) => {
+    const catalog = db.loadCatalog();
+    res.json(catalog);
+});
+
+/**
  * DELETE /api/video/:videoId  [ADMIN]
  * Elimina un video del catálogo (y sus archivos si es modo local).
  */
