@@ -792,9 +792,18 @@ app.delete('/api/students/:id', requireAdmin, (req, res) => {
  *              La clave sigue requiriendo JWT válido → protección intacta.
  */
 app.get('/api/r/:videoId', async (req, res) => {
-    const token = (req.headers['authorization'] || '').replace('Bearer ', '') || req.query.token;
-    if (!token) return res.status(401).send('No autorizado');
-    try { jwt.verify(token, JWT_SECRET); } catch { return res.status(401).send('Token inválido o expirado'); }
+    let token = (req.headers['authorization'] || '').replace('Bearer ', '') || req.query.token;
+    if (token) {
+        try { jwt.verify(token, JWT_SECRET); } catch { return res.status(401).send('Token inválido o expirado'); }
+    } else {
+        // Auto-emisión de token guest (5 min) para reproductores externos (Base44, etc.)
+        // El token se incrusta en todas las URLs del manifest — el cliente nunca ve las URLs reales de Bunny
+        token = jwt.sign(
+            { sub: 'guest-' + crypto.randomBytes(4).toString('hex'), guest: true },
+            JWT_SECRET,
+            { expiresIn: '5m', issuer: 'reproductor-cursos' }
+        );
+    }
 
     const { videoId } = req.params;
     if (!/^[0-9a-f-]{36}$/i.test(videoId)) return res.status(400).send('videoId inválido');
@@ -818,13 +827,13 @@ app.get('/api/r/:videoId', async (req, res) => {
             const content = await fetchRemoteText(targetUrl);
 
             if (content.includes('#EXT-X-STREAM-INF')) {
-                // Master manifest: reescribir renditions → nuestro proxy
+                // Master manifest: reescribir renditions → nuestro proxy (con token incrustado)
                 const rewritten = content.split('\n').map(line => {
                     const t = line.trim();
                     if (!t || t.startsWith('#')) return line;
                     const absUrl = resolveUrl(targetUrl, t);
                     const enc = Buffer.from(absUrl).toString('base64url');
-                    return `${base}/api/r/${videoId}?sub=${enc}`;
+                    return `${base}/api/r/${videoId}?sub=${enc}&token=${encodeURIComponent(token)}`;
                 }).join('\n');
                 return sendManifest(res, rewritten);
             }
@@ -845,7 +854,7 @@ app.get('/api/r/:videoId', async (req, res) => {
                         if (uriMatch) {
                             const bunnyKeyUrl = resolveUrl(targetUrl, uriMatch[1]);
                             const encodedK = Buffer.from(bunnyKeyUrl).toString('base64url');
-                            rewrittenLines.push(t.replace(/URI="[^"]+"/, `URI="${base}/api/drm/proxy-key?k=${encodedK}"`));
+                            rewrittenLines.push(t.replace(/URI="[^"]+"/, `URI="${base}/api/drm/proxy-key?k=${encodedK}&token=${encodeURIComponent(token)}"`));
                         } else {
                             rewrittenLines.push(line);
                         }
@@ -853,21 +862,21 @@ app.get('/api/r/:videoId', async (req, res) => {
                         // Línea de segmento: enc=0 → proxy sin re-cifrar
                         const absUrl = resolveUrl(targetUrl, t);
                         const enc = Buffer.from(absUrl).toString('base64url');
-                        rewrittenLines.push(`${base}/api/b/${videoId}?seg=${enc}&enc=0`);
+                        rewrittenLines.push(`${base}/api/b/${videoId}?seg=${enc}&enc=0&token=${encodeURIComponent(token)}`);
                     } else {
                         rewrittenLines.push(line);
                     }
                 }
             } else {
                 // Bunny NO cifra: inyectar nuestra propia EXT-X-KEY y cifrar segmentos
-                const keyUri = `${base}/api/drm/key/${catalogEntry.keyId}`;
+                const keyUri = `${base}/api/drm/key/${catalogEntry.keyId}?token=${encodeURIComponent(token)}`;
                 rewrittenLines.push(`#EXT-X-KEY:METHOD=AES-128,URI="${keyUri}",IV=0x${'0'.repeat(32)}`);
                 for (const line of lines) {
                     const t = line.trim();
                     if (t && !t.startsWith('#')) {
                         const absUrl = resolveUrl(targetUrl, t);
                         const enc = Buffer.from(absUrl).toString('base64url');
-                        rewrittenLines.push(`${base}/api/b/${videoId}?seg=${enc}`);
+                        rewrittenLines.push(`${base}/api/b/${videoId}?seg=${enc}&token=${encodeURIComponent(token)}`);
                     } else {
                         rewrittenLines.push(line);
                     }
@@ -894,7 +903,7 @@ app.get('/api/r/:videoId', async (req, res) => {
             const renditionPath = path.join(hlsBase, `${quality}.m3u8`);
             if (!fs.existsSync(renditionPath)) return res.status(404).send('Calidad no disponible');
             let content = fs.readFileSync(renditionPath, 'utf-8');
-            content = content.replace(/^(seg\w+\.ts)$/gm, `${base}/api/b/${videoId}/$1`);
+            content = content.replace(/^(seg\w+\.ts)$/gm, `${base}/api/b/${videoId}/$1?token=${encodeURIComponent(token)}`);
             return sendManifest(res, content);
         }
 
@@ -902,14 +911,14 @@ app.get('/api/r/:videoId', async (req, res) => {
         if (fs.existsSync(masterPath)) {
             let content = fs.readFileSync(masterPath, 'utf-8');
             content = content.replace(/^(360p|720p|1080p)\.m3u8$/gm,
-                (_, q) => `${base}/api/r/${videoId}?q=${q}`);
+                (_, q) => `${base}/api/r/${videoId}?q=${q}&token=${encodeURIComponent(token)}`);
             return sendManifest(res, content);
         }
 
         // Playlist única (backward compat: videos procesados con el pipeline anterior)
         if (!fs.existsSync(singlePath)) return res.status(404).send('Video no encontrado');
         let content = fs.readFileSync(singlePath, 'utf-8');
-        content = content.replace(/^(seg\w+\.ts)$/gm, `${base}/api/b/${videoId}/$1`);
+        content = content.replace(/^(seg\w+\.ts)$/gm, `${base}/api/b/${videoId}/$1?token=${encodeURIComponent(token)}`);
         return sendManifest(res, content);
     }
 
@@ -936,7 +945,7 @@ app.get('/api/r/:videoId', async (req, res) => {
         // Master manifest: reescribir referencias a renditions con URLs del proxy
         if (content.includes('#EXT-X-STREAM-INF')) {
             const rewritten = content.replace(/^(360p|720p|1080p)\.m3u8$/gm,
-                (_, q) => `${base}/api/r/${videoId}?q=${q}`);
+                (_, q) => `${base}/api/r/${videoId}?q=${q}&token=${encodeURIComponent(token)}`);
             return sendManifest(res, rewritten);
         }
 
