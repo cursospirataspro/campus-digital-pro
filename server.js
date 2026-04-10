@@ -62,6 +62,29 @@ const findStudentByEmail = (email) => db.findStudentByEmail(email);
 const SAFE_BUNNY_RE = /^https:\/\/[a-z0-9-]+\.(?:b-cdn\.net|bunnycdn\.com|mediadelivery\.net)\//i;
 function isSafeBunnyUrl(url) { return SAFE_BUNNY_RE.test(url); }
 
+// Token auth key para el pull zone de Bunny Stream
+const BUNNY_TOKEN_KEY = process.env.BUNNY_TOKEN_KEY || '';
+
+/**
+ * Genera una URL firmada con token auth de Bunny CDN (Advanced — HMAC-SHA256).
+ * Implementación oficial: https://github.com/BunnyWay/BunnyCDN.TokenAuthentication
+ * @param {string} url - URL original de Bunny (sin token)
+ * @param {number} expiresIn - Segundos de validez (default 24h)
+ * @returns {string} URL con token auth (query string format)
+ */
+function signBunnyUrl(url, expiresIn = 86400) {
+    if (!BUNNY_TOKEN_KEY) return url;
+    const parsed = new URL(url);
+    const expires = String(Math.floor(Date.now() / 1000) + expiresIn);
+    // message = signaturePath + expires + signingData + userIp
+    // signingData and userIp are empty for our case
+    const message = parsed.pathname + expires;
+    const digest = crypto.createHmac('sha256', BUNNY_TOKEN_KEY).update(message).digest();
+    const token = 'HS256-' + digest.toString('base64')
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname}?token=${token}&expires=${expires}`;
+}
+
 /** Resuelve una URL relativa a una URL base.
  *  Preserva el prefijo de token Bunny CDN (bcdn_token=...) si existe en base. */
 function resolveUrl(base, relative) {
@@ -500,6 +523,8 @@ app.get('/api/drm/proxy-key', async (req, res) => {
         return res.status(400).send('k inválido');
     }
     if (!isSafeBunnyUrl(keyUrl)) return res.status(400).send('URL no permitida');
+    // Firmar URL con token auth de Bunny
+    keyUrl = signBunnyUrl(keyUrl);
 
     const mod = keyUrl.startsWith('https') ? https : http;
     const parsedUrl = new URL(keyUrl);
@@ -856,7 +881,9 @@ app.get('/api/r/:videoId', async (req, res) => {
     if (catalogEntry && catalogEntry.sourceType === 'bunny') {
         // ?sub= = manifest de rendición (base64url de URL absoluta de Bunny)
         const sub = req.query.sub ? Buffer.from(req.query.sub, 'base64url').toString('utf-8') : null;
-        const targetUrl = sub || catalogEntry.bunnyUrl;
+        // Firmar URL con token auth de Bunny (genera bcdn_token automáticamente)
+        const rawUrl = sub || catalogEntry.bunnyUrl;
+        const targetUrl = signBunnyUrl(rawUrl);
 
         if (!isSafeBunnyUrl(targetUrl)) return res.status(400).send('URL inválida');
 
@@ -1021,6 +1048,8 @@ app.get('/api/b/:videoId', (req, res) => {
         return res.status(400).send('Parámetro seg inválido');
     }
     if (!isSafeBunnyUrl(segUrl)) return res.status(400).send('URL no permitida');
+    // Firmar URL con token auth de Bunny
+    segUrl = signBunnyUrl(segUrl);
 
     // enc=0 → Bunny ya cifra sus segmentos, pasar sin re-cifrar
     if (req.query.enc === '0') {
