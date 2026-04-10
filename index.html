@@ -193,46 +193,18 @@ function loadSession()  { try { return sessionStorage.getItem('_rt'); } catch { 
 // ================================================================
 //  DEVICE FINGERPRINT — identifica el dispositivo del espectador
 // ================================================================
-async function getDeviceFingerprint() {
+function getDeviceFingerprint() {
     const parts = [];
-    // Datos del navegador/sistema
     parts.push(navigator.userAgent || '');
     parts.push(navigator.language || '');
-    parts.push(navigator.platform || '');
     parts.push(`${screen.width}x${screen.height}x${screen.colorDepth}`);
     parts.push(String(new Date().getTimezoneOffset()));
     parts.push(String(navigator.hardwareConcurrency || 0));
-
-    // Canvas fingerprint (diferente por navegador + GPU + fuentes instaladas)
-    try {
-        const cv = document.createElement('canvas');
-        cv.width = 220; cv.height = 50;
-        const cx = cv.getContext('2d');
-        cx.fillStyle = '#1a1a2e';   cx.fillRect(0, 0, 220, 50);
-        cx.font = 'bold 16px Arial'; cx.fillStyle = '#e63946';
-        cx.fillText('Device-ID:drm', 4, 22);
-        cx.font = '11px monospace'; cx.fillStyle = 'rgba(100,200,80,0.85)';
-        cx.fillText('\u29BF\u29BF\u29BF secure', 8, 40);
-        parts.push(cv.toDataURL());
-    } catch { parts.push('no-canvas'); }
-
-    // WebGL renderer (identifica la GPU)
-    try {
-        const gl = document.createElement('canvas').getContext('webgl');
-        if (gl) {
-            const ext = gl.getExtension('WEBGL_debug_renderer_info');
-            if (ext) {
-                parts.push(gl.getParameter(ext.UNMASKED_VENDOR_WEBGL)   || '');
-                parts.push(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) || '');
-            }
-        }
-    } catch { parts.push('no-webgl'); }
-
-    // SHA-256 → 6 caracteres alfanuméricos (base36 de los primeros 4 bytes)
-    const buf  = new TextEncoder().encode(parts.join('|'));
-    const hash = await crypto.subtle.digest('SHA-256', buf);
-    const hashArr = Array.from(new Uint8Array(hash));
-    const n = ((hashArr[0] << 24) | (hashArr[1] << 16) | (hashArr[2] << 8) | hashArr[3]) >>> 0;
+    // Hash simple sin crypto.subtle (compatible con iframes cross-origin)
+    const str = parts.join('|');
+    let h = 0;
+    for (let i = 0; i < str.length; i++) { h = ((h << 5) - h + str.charCodeAt(i)) | 0; }
+    const n = (h >>> 0);
     const CHARS = '0123456789abcdefghijklmnopqrstuvwxyz';
     let id = ''; let rem = n;
     while (rem > 0) { id = CHARS[rem % 36] + id; rem = Math.floor(rem / 36); }
@@ -251,13 +223,12 @@ window.addEventListener('DOMContentLoaded', async () => {
         return;
     }
 
-    showLoading('Identificando dispositivo...');
+    showLoading('Preparando reproducción...');
 
-    // 1. Computar fingerprint del dispositivo
+    // 1. Generar ID de dispositivo
     try {
-        STATE.deviceId = await getDeviceFingerprint();
+        STATE.deviceId = getDeviceFingerprint();
     } catch {
-        // Si falla (muy raro), generar ID temporal de 6 chars
         const r = crypto.getRandomValues(new Uint8Array(4));
         const n = ((r[0] << 24) | (r[1] << 16) | (r[2] << 8) | r[3]) >>> 0;
         const C = '0123456789abcdefghijklmnopqrstuvwxyz';
