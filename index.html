@@ -354,7 +354,7 @@ function initPlayer(manifestUrl, mediaToken) {
             loader: SecureLoader,
             xhrSetup(xhr, url) {
                 if (url.includes('/api/r/') || url.includes('/api/b/') || url.includes('/api/drm/')) {
-                    xhr.setRequestHeader('Authorization', 'Bearer ' + mediaToken);
+                    xhr.setRequestHeader('Authorization', 'Bearer ' + STATE.mediaToken);
                 }
             },
             autoStartLoad:            true,
@@ -447,12 +447,23 @@ function scheduleTokenRefresh(delayMs, videoId) {
     if (refreshTimer) clearTimeout(refreshTimer);
     refreshTimer = setTimeout(async () => {
         try {
+            // 1. Renovar token de autenticación
             const r = await fetch(API_BASE + '/api/auth/auto?did=' + encodeURIComponent(STATE.deviceId));
-            if (r.ok) {
-                const { token } = await r.json();
-                STATE.token = token;
-                saveSession(token);
-                await loadAndPlayVideo(videoId);
+            if (!r.ok) throw new Error('auth refresh failed');
+            const { token } = await r.json();
+            STATE.token = token;
+            saveSession(token);
+
+            // 2. Renovar mediaToken sin reiniciar el reproductor
+            const r2 = await fetch(API_BASE + '/api/video/' + encodeURIComponent(videoId) + '/play', {
+                headers: { Authorization: 'Bearer ' + STATE.token }
+            });
+            if (r2.ok) {
+                const data = await r2.json();
+                STATE.mediaToken = data.mediaToken;
+                if (data.sessionId) STATE.sessionId = data.sessionId;
+                // Reprogramar siguiente refresco
+                scheduleTokenRefresh(data.ttl * 0.8 * 1000, videoId);
             }
         } catch(e) { console.warn('[refresh]', e.message); }
     }, delayMs);
