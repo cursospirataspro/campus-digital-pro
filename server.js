@@ -51,6 +51,45 @@ const loadCatalog    = () => db.loadCatalog();
 const addToCatalog   = (e) => db.addToCatalog(e);
 const saveCatalog    = () => {}; // no-op: SQLite es transaccional
 
+/**
+ * Sincroniza el catálogo completo a CATALOG_SEED en Render.
+ * Se ejecuta en background después de cada cambio en el catálogo.
+ * Sin límite de tamaño — guarda todos los videos.
+ */
+function syncCatalogSeed() {
+    if (!RENDER_API_KEY || !RENDER_SERVICE_ID) return;
+    try {
+        const catalog = db.loadCatalog();
+        const seed = JSON.stringify(catalog.map(v => ({
+            videoId: v.videoId, title: v.title, sourceType: v.sourceType || 'bunny',
+            status: v.status || 'ready', bunnyUrl: v.bunnyUrl || null,
+            keyId: v.keyId || null, uploadedAt: v.uploadedAt
+        })));
+        // GET existing env vars
+        const getOpts = { hostname: 'api.render.com', path: `/v1/services/${RENDER_SERVICE_ID}/env-vars`,
+            headers: { Authorization: `Bearer ${RENDER_API_KEY}`, Accept: 'application/json' } };
+        https.get(getOpts, (res) => {
+            let raw = ''; res.on('data', c => raw += c);
+            res.on('end', () => {
+                try {
+                    const vars = JSON.parse(raw).map(v => ({ key: v.envVar.key, value: v.envVar.value }));
+                    const idx = vars.findIndex(v => v.key === 'CATALOG_SEED');
+                    if (idx >= 0) vars[idx].value = seed; else vars.push({ key: 'CATALOG_SEED', value: seed });
+                    const body = JSON.stringify(vars);
+                    const putOpts = { hostname: 'api.render.com', path: `/v1/services/${RENDER_SERVICE_ID}/env-vars`,
+                        method: 'PUT', headers: { Authorization: `Bearer ${RENDER_API_KEY}`, Accept: 'application/json', 'Content-Type': 'application/json' } };
+                    const req = https.request(putOpts, (r2) => {
+                        let d = ''; r2.on('data', c => d += c);
+                        r2.on('end', () => console.log(`[sync] CATALOG_SEED actualizado: ${catalog.length} videos`));
+                    });
+                    req.on('error', e => console.error('[sync] Error:', e.message));
+                    req.write(body); req.end();
+                } catch (e) { console.error('[sync] Parse error:', e.message); }
+            });
+        }).on('error', e => console.error('[sync] GET error:', e.message));
+    } catch (e) { console.error('[sync] Error:', e.message); }
+}
+
 // ---- Alumnos: ahora en SQLite vía database.js ----
 const findStudentByEmail = (email) => db.findStudentByEmail(email);
 
@@ -162,6 +201,8 @@ const JWT_SECRET  = process.env.JWT_SECRET;
 const JWT_EXPIRES = process.env.JWT_EXPIRES_IN || '2h';
 const MEDIA_TTL      = parseInt(process.env.MEDIA_TOKEN_TTL || '300', 10);
 const MAX_CONCURRENT = parseInt(process.env.MAX_CONCURRENT_SESSIONS || '1', 10);
+const RENDER_API_KEY    = process.env.RENDER_API_KEY || '';
+const RENDER_SERVICE_ID = process.env.RENDER_SERVICE_ID || '';
 
 /**
  * Resuelve la URL base pública del servidor.
@@ -638,6 +679,7 @@ app.post('/api/video/upload', requireAdmin, upload.single('video'), async (req, 
         const result = await processVideo(localPath, videoId, base);
         db.updateCatalogEntry({ videoId, status: 'ready', segmentCount: result.segmentCount, keyId: result.keyId });
         console.log(`[upload] Video listo: ${videoId} (${result.segmentCount} segmentos)`);
+        syncCatalogSeed();
     } catch (err) {
         db.updateCatalogEntry({ videoId, status: 'error', error: err.message });
         console.error(`[upload] Error procesando video ${videoId}:`, err.message);
@@ -676,6 +718,7 @@ app.delete('/api/video/:videoId', requireAdmin, async (req, res) => {
         const dir = path.join('./public/hls', 'hls', videoId);
         if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
     }
+    syncCatalogSeed();
     res.json({ ok: true });
 });
 
@@ -714,6 +757,7 @@ app.post('/api/catalog/add-bunny', requireAdmin, async (req, res) => {
         uploadedAt: new Date().toISOString(),
     });
 
+    syncCatalogSeed();
     res.status(201).json({ videoId, title, status: 'ready', sourceType: 'bunny' });
 });
 
