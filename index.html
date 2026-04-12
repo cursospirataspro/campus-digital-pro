@@ -177,6 +177,7 @@ const STATE = {
     deviceId: null, sessionId: null, hls: null
 };
 
+const API_BASE = window.location.origin;
 const $  = id => document.getElementById(id);
 const setStatus     = t => $('status-text').textContent = t;
 const showLoading   = m => { $('loading-msg').textContent = m || 'Cargando...'; $('loading-overlay').classList.remove('hidden'); };
@@ -187,8 +188,9 @@ function parseJwt(token) {
     try { return JSON.parse(atob(token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))); }
     catch { return {}; }
 }
-function saveSession(t) { try { sessionStorage.setItem('_rt', t); } catch {} }
-function loadSession()  { try { return sessionStorage.getItem('_rt'); } catch { return null; } }
+let _memoryToken = null;
+function saveSession(t) { _memoryToken = t; try { sessionStorage.setItem('_rt', t); } catch {} }
+function loadSession()  { try { return sessionStorage.getItem('_rt') || _memoryToken; } catch { return _memoryToken; } }
 
 // ================================================================
 //  DEVICE FINGERPRINT — identifica el dispositivo del espectador
@@ -251,7 +253,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (!STATE.token) {
         showLoading('Preparando reproducción...');
         try {
-            const r = await fetch('/api/auth/auto?did=' + encodeURIComponent(STATE.deviceId));
+            const r = await fetch(API_BASE + '/api/auth/auto?did=' + encodeURIComponent(STATE.deviceId));
             if (!r.ok) throw new Error('HTTP ' + r.status);
             const { token } = await r.json();
             STATE.token = token;
@@ -278,7 +280,7 @@ async function loadAndPlayVideo(videoId) {
         }
 
         setStatus('Obteniendo licencia...');
-        const r = await fetch('/api/video/' + encodeURIComponent(videoId) + '/play', {
+        const r = await fetch(API_BASE + '/api/video/' + encodeURIComponent(videoId) + '/play', {
             headers: { Authorization: 'Bearer ' + STATE.token }
         });
         if (!r.ok) {
@@ -290,7 +292,7 @@ async function loadAndPlayVideo(videoId) {
         STATE.sessionId  = sessionId || null;
 
         // Log de entrega
-        fetch('/api/watermark/log', {
+        fetch(API_BASE + '/api/watermark/log', {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
             body:    JSON.stringify({ mediaToken })
@@ -380,10 +382,6 @@ function initPlayer(manifestUrl, mediaToken) {
         });
         STATE.hls = hls;
 
-    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        video.src = manifestUrl;
-        video.addEventListener('loadedmetadata', () => { hideLoading(); }, { once: true });
-        video.addEventListener('error', () => showError('Error al cargar en Safari.'), { once: true });
     } else {
         showError('Tu navegador no soporta HLS. Usa Chrome, Firefox o Safari actualizado.');
     }
@@ -449,7 +447,7 @@ function scheduleTokenRefresh(delayMs, videoId) {
     if (refreshTimer) clearTimeout(refreshTimer);
     refreshTimer = setTimeout(async () => {
         try {
-            const r = await fetch('/api/auth/auto?did=' + encodeURIComponent(STATE.deviceId));
+            const r = await fetch(API_BASE + '/api/auth/auto?did=' + encodeURIComponent(STATE.deviceId));
             if (r.ok) {
                 const { token } = await r.json();
                 STATE.token = token;
@@ -513,7 +511,7 @@ function startHeartbeat() {
     heartbeatTimer = setInterval(async () => {
         if (!STATE.sessionId || !STATE.mediaToken) return;
         try {
-            const r = await fetch('/api/session/heartbeat', {
+            const r = await fetch(API_BASE + '/api/session/heartbeat', {
                 method:  'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body:    JSON.stringify({ sessionId: STATE.sessionId, mediaToken: STATE.mediaToken })
@@ -535,9 +533,9 @@ function stopHeartbeat() { if (heartbeatTimer) clearInterval(heartbeatTimer); he
 function sendEnd(sessionId) {
     const body = JSON.stringify({ sessionId });
     if (navigator.sendBeacon) {
-        navigator.sendBeacon('/api/session/end', new Blob([body], { type: 'application/json' }));
+        navigator.sendBeacon(API_BASE + '/api/session/end', new Blob([body], { type: 'application/json' }));
     } else {
-        fetch('/api/session/end', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true }).catch(() => {});
+        fetch(API_BASE + '/api/session/end', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true }).catch(() => {});
     }
 }
 window.addEventListener('pagehide', () => { if (STATE.sessionId) sendEnd(STATE.sessionId); });
