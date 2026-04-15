@@ -500,10 +500,14 @@ app.get('/api/video/:videoId/play', requireAuth, async (req, res) => {
     if (allowedDomains.length > 0) {
         const origin  = req.headers['origin']  || '';
         const referer = req.headers['referer'] || '';
-        const isAllowed = allowedDomains.some(d =>
+        // Same-origin (iframe en onrender.com) → origin y referer vacíos o propios → permitir
+        const isSameOrigin = (!origin && !referer)
+            || origin.includes('onrender.com')
+            || referer.includes('onrender.com');
+        const isDomainAllowed = allowedDomains.some(d =>
             origin.startsWith(d) || referer.startsWith(d)
-        ) || origin.includes('onrender.com') || referer.includes('onrender.com');
-        if (!isAllowed && !req.user.admin) {
+        );
+        if (!isSameOrigin && !isDomainAllowed && !req.user.admin) {
             return res.status(403).json({ error: 'Reproducción no permitida desde este sitio.' });
         }
     }
