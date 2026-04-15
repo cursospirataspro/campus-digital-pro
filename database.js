@@ -85,6 +85,10 @@ CREATE TABLE IF NOT EXISTS active_sessions (
     last_seen    INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON active_sessions(user_id);
+
+CREATE TABLE IF NOT EXISTS allowed_domains (
+    domain TEXT PRIMARY KEY
+);
 `);
 
 // ================================================================
@@ -388,6 +392,22 @@ module.exports.deleteCatalogEntry = (videoId) =>
     }
 })();
 
+// Seed de dominios permitidos desde env var
+(function seedDomainsFromEnv() {
+    const raw = process.env.ALLOWED_DOMAINS_SEED;
+    if (!raw) return;
+    try {
+        const domains = JSON.parse(raw);
+        if (!Array.isArray(domains)) return;
+        for (const d of domains) {
+            if (typeof d === 'string' && d.trim()) {
+                db.prepare('INSERT OR IGNORE INTO allowed_domains (domain) VALUES (?)').run(d.trim());
+            }
+        }
+        console.log('[db] Dominios seed:', domains.length);
+    } catch { console.error('[db] ALLOWED_DOMAINS_SEED JSON inválido'); }
+})();
+
 // ================================================================
 //  API — SESIONES ACTIVAS
 // ================================================================
@@ -422,3 +442,16 @@ module.exports.cleanExpiredSessions = () => {
 
 // Exponer instancia para queries avanzadas si se necesitan
 module.exports.db = db;
+
+// ================================================================
+//  API — ALLOWED DOMAINS
+// ================================================================
+
+module.exports.getAllowedDomains = () =>
+    db.prepare('SELECT domain FROM allowed_domains ORDER BY domain').all().map(r => r.domain);
+
+module.exports.addAllowedDomain = (domain) =>
+    db.prepare('INSERT OR IGNORE INTO allowed_domains (domain) VALUES (?)').run(domain);
+
+module.exports.removeAllowedDomain = (domain) =>
+    db.prepare('DELETE FROM allowed_domains WHERE domain = ?').run(domain);

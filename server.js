@@ -90,6 +90,38 @@ function syncCatalogSeed() {
     } catch (e) { console.error('[sync] Error:', e.message); }
 }
 
+/**
+ * Sincroniza los dominios permitidos a ALLOWED_DOMAINS_SEED en Render.
+ */
+function syncDomainsSeed() {
+    if (!RENDER_API_KEY || !RENDER_SERVICE_ID) return;
+    try {
+        const domains = db.getAllowedDomains();
+        const seed = JSON.stringify(domains);
+        const getOpts = { hostname: 'api.render.com', path: `/v1/services/${RENDER_SERVICE_ID}/env-vars`,
+            headers: { Authorization: `Bearer ${RENDER_API_KEY}`, Accept: 'application/json' } };
+        https.get(getOpts, (res) => {
+            let raw = ''; res.on('data', c => raw += c);
+            res.on('end', () => {
+                try {
+                    const vars = JSON.parse(raw).map(v => ({ key: v.envVar.key, value: v.envVar.value }));
+                    const idx = vars.findIndex(v => v.key === 'ALLOWED_DOMAINS_SEED');
+                    if (idx >= 0) vars[idx].value = seed; else vars.push({ key: 'ALLOWED_DOMAINS_SEED', value: seed });
+                    const body = JSON.stringify(vars);
+                    const putOpts = { hostname: 'api.render.com', path: `/v1/services/${RENDER_SERVICE_ID}/env-vars`,
+                        method: 'PUT', headers: { Authorization: `Bearer ${RENDER_API_KEY}`, Accept: 'application/json', 'Content-Type': 'application/json' } };
+                    const req = https.request(putOpts, (r2) => {
+                        let d = ''; r2.on('data', c => d += c);
+                        r2.on('end', () => console.log(`[sync] ALLOWED_DOMAINS_SEED actualizado: ${domains.length} dominios`));
+                    });
+                    req.on('error', e => console.error('[sync] Error dominios:', e.message));
+                    req.write(body); req.end();
+                } catch (e) { console.error('[sync] Parse error dominios:', e.message); }
+            });
+        }).on('error', e => console.error('[sync] GET error dominios:', e.message));
+    } catch (e) { console.error('[sync] Error dominios:', e.message); }
+}
+
 // ---- Alumnos: ahora en SQLite vía database.js ----
 const findStudentByEmail = (email) => db.findStudentByEmail(email);
 
@@ -227,21 +259,20 @@ if (!JWT_SECRET || JWT_SECRET.length < 32) {
 app.set('trust proxy', 1);
 app.use(express.json({ limit: '1mb' }));
 
-// CORS — permite peticiones desde Base44 y dominio propio
-const ALLOWED_ORIGINS = [
-    'https://campusdigitalpro.com',
-    'https://www.campusdigitalpro.com',
+// CORS — permite peticiones desde dominios configurados en BD + Base44
+const STATIC_ORIGINS = [
     /\.base44\.com$/,
     /\.base44\.app$/,
 ];
 app.use((req, res, next) => {
     const origin = req.headers['origin'] || '';
-    const allowed = ALLOWED_ORIGINS.some(o =>
-        typeof o === 'string' ? o === origin : o.test(origin)
-    );
+    const dbDomains = db.getAllowedDomains();
+    const allowed = STATIC_ORIGINS.some(o => o.test(origin))
+        || dbDomains.some(d => origin === d || origin === d.replace(/\/$/, ''))
+        || origin.includes('onrender.com');
     if (allowed) {
         res.setHeader('Access-Control-Allow-Origin', origin);
-        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
         res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
         res.setHeader('Access-Control-Allow-Credentials', 'true');
     }
@@ -251,10 +282,10 @@ app.use((req, res, next) => {
 
 app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    // Permitir iframe desde Base44 y dominio propio (NO usar SAMEORIGIN que bloquea embeds)
-    res.setHeader('Content-Security-Policy',
-        "frame-ancestors 'self' https://campusdigitalpro.com https://www.campusdigitalpro.com https://*.base44.com https://*.base44.app"
-    );
+    // Permitir iframe desde dominios configurados en BD + Base44
+    const dbDomains = db.getAllowedDomains();
+    const frameAncestors = ["'self'", ...dbDomains, 'https://*.base44.com', 'https://*.base44.app'].join(' ');
+    res.setHeader('Content-Security-Policy', `frame-ancestors ${frameAncestors}`);
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Permissions-Policy', 'camera=(), microphone=()');
     // Deshabilitar caché para rutas de API y DRM
@@ -462,6 +493,19 @@ app.get('/api/video/:videoId/play', requireAuth, async (req, res) => {
     // Validar videoId (UUID v4)
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(videoId)) {
         return res.status(400).json({ error: 'videoId inválido' });
+    }
+
+    // Validar dominio de origen — solo permitir dominios configurados
+    const allowedDomains = db.getAllowedDomains();
+    if (allowedDomains.length > 0) {
+        const origin  = req.headers['origin']  || '';
+        const referer = req.headers['referer'] || '';
+        const isAllowed = allowedDomains.some(d =>
+            origin.startsWith(d) || referer.startsWith(d)
+        ) || origin.includes('onrender.com') || referer.includes('onrender.com');
+        if (!isAllowed && !req.user.admin) {
+            return res.status(403).json({ error: 'Reproducción no permitida desde este sitio.' });
+        }
     }
 
     // Verificar que el alumno tenga acceso a este video
@@ -759,6 +803,35 @@ app.post('/api/catalog/add-bunny', requireAdmin, async (req, res) => {
 
     syncCatalogSeed();
     res.status(201).json({ videoId, title, status: 'ready', sourceType: 'bunny' });
+});
+
+// ================================================================
+//  RUTAS: DOMINIOS PERMITIDOS [ADMIN]
+// ================================================================
+
+/** GET /api/allowed-domains — Lista dominios permitidos */
+app.get('/api/allowed-domains', requireAdmin, (req, res) => {
+    res.json({ domains: db.getAllowedDomains() });
+});
+
+/** POST /api/allowed-domains — Agrega un dominio */
+app.post('/api/allowed-domains', requireAdmin, (req, res) => {
+    const { domain } = req.body || {};
+    if (!domain || typeof domain !== 'string') return res.status(400).json({ error: 'domain requerido' });
+    const clean = domain.trim().toLowerCase().replace(/\/+$/, '');
+    if (!/^https?:\/\/[a-z0-9.-]+/.test(clean)) return res.status(400).json({ error: 'Formato inválido. Ejemplo: https://campusdigitalpro.com' });
+    db.addAllowedDomain(clean);
+    syncDomainsSeed();
+    res.json({ ok: true, domains: db.getAllowedDomains() });
+});
+
+/** DELETE /api/allowed-domains — Elimina un dominio */
+app.delete('/api/allowed-domains', requireAdmin, (req, res) => {
+    const { domain } = req.body || {};
+    if (!domain) return res.status(400).json({ error: 'domain requerido' });
+    db.removeAllowedDomain(domain);
+    syncDomainsSeed();
+    res.json({ ok: true, domains: db.getAllowedDomains() });
 });
 
 // ================================================================
