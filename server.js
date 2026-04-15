@@ -479,6 +479,15 @@ app.get('/api/auth/auto', (req, res) => {
     res.json({ token, expiresIn: JWT_EXPIRES });
 });
 
+/**
+ * GET /api/embed-status
+ * Indica si hay restricción de dominios activa (público, sin auth).
+ */
+app.get('/api/embed-status', (req, res) => {
+    const domains = db.getAllowedDomains();
+    res.json({ restricted: domains.length > 0 });
+});
+
 // ================================================================
 //  RUTAS: REPRODUCCIÓN DE VIDEO
 // ================================================================

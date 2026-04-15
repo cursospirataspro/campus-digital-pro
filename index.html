@@ -226,6 +226,16 @@ window.addEventListener('DOMContentLoaded', async () => {
         return;
     }
 
+    // Verificar si hay restricción de dominios y si estamos en un iframe permitido
+    try {
+        const embedRes = await fetch(API_BASE + '/api/embed-status');
+        const embedData = await embedRes.json();
+        if (embedData.restricted && window.self === window.top) {
+            showError('Este video solo puede reproducirse desde un sitio autorizado.');
+            return;
+        }
+    } catch {}
+
     showLoading('Preparando reproducción...');
 
     // 1. Generar ID de dispositivo
