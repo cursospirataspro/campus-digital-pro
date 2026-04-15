@@ -834,6 +834,44 @@ app.delete('/api/allowed-domains', requireAdmin, (req, res) => {
     res.json({ ok: true, domains: db.getAllowedDomains() });
 });
 
+/**
+ * POST /api/admin/update-credentials  [ADMIN]
+ * Actualiza ADMIN_USER y ADMIN_PASS en Render env vars.
+ * Body: { newUser, newPass }
+ */
+app.post('/api/admin/update-credentials', requireAdmin, (req, res) => {
+    const { newUser, newPass } = req.body || {};
+    if (!newUser || !newPass) return res.status(400).json({ error: 'newUser y newPass requeridos' });
+    if (!RENDER_API_KEY || !RENDER_SERVICE_ID) return res.status(500).json({ error: 'RENDER_API_KEY no configurada' });
+
+    const getOpts = { hostname: 'api.render.com', path: `/v1/services/${RENDER_SERVICE_ID}/env-vars`,
+        headers: { Authorization: `Bearer ${RENDER_API_KEY}`, Accept: 'application/json' } };
+    https.get(getOpts, (r) => {
+        let raw = ''; r.on('data', c => raw += c);
+        r.on('end', () => {
+            try {
+                const vars = JSON.parse(raw).map(v => ({ key: v.envVar.key, value: v.envVar.value }));
+                const iUser = vars.findIndex(v => v.key === 'ADMIN_USER');
+                const iPass = vars.findIndex(v => v.key === 'ADMIN_PASS');
+                if (iUser >= 0) vars[iUser].value = newUser; else vars.push({ key: 'ADMIN_USER', value: newUser });
+                if (iPass >= 0) vars[iPass].value = newPass; else vars.push({ key: 'ADMIN_PASS', value: newPass });
+                const body = JSON.stringify(vars);
+                const putOpts = { hostname: 'api.render.com', path: `/v1/services/${RENDER_SERVICE_ID}/env-vars`,
+                    method: 'PUT', headers: { Authorization: `Bearer ${RENDER_API_KEY}`, Accept: 'application/json', 'Content-Type': 'application/json' } };
+                const req2 = https.request(putOpts, (r2) => {
+                    let d = ''; r2.on('data', c => d += c);
+                    r2.on('end', () => {
+                        console.log('[admin] Credenciales actualizadas en Render');
+                        res.json({ ok: true, message: 'Credenciales actualizadas. El servicio se reiniciará.' });
+                    });
+                });
+                req2.on('error', e => res.status(500).json({ error: e.message }));
+                req2.write(body); req2.end();
+            } catch (e) { res.status(500).json({ error: e.message }); }
+        });
+    }).on('error', e => res.status(500).json({ error: e.message }));
+});
+
 // ================================================================
 //  RUTAS: GESTIÓN DE ALUMNOS [ADMIN]
 // ================================================================
