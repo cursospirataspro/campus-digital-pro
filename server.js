@@ -910,6 +910,17 @@ app.post('/api/courses/move-video', requireAdmin, (req, res) => {
     res.json({ ok: true });
 });
 
+/** POST /api/courses/bulk-move — Mover multiples videos a un curso */
+app.post('/api/courses/bulk-move', requireAdmin, (req, res) => {
+    const { videoIds, courseId } = req.body || {};
+    if (!Array.isArray(videoIds) || !videoIds.length) return res.status(400).json({ error: 'videoIds requerido (array no vacio)' });
+    for (const vid of videoIds) {
+        db.moveVideoToCourse(vid, courseId || null);
+    }
+    syncCatalogSeed();
+    res.json({ ok: true, moved: videoIds.length });
+});
+
 /** POST /api/courses/reorder — Reordenar videos dentro de un curso */
 app.post('/api/courses/reorder', requireAdmin, (req, res) => {
     const { orders } = req.body || {};

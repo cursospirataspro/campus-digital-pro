@@ -207,6 +207,15 @@
             padding: 10px 14px; cursor: pointer; margin-bottom: 6px; font-size: 0.85rem;
         }
         .move-modal .course-option:hover { border-color: var(--c-primary); color: var(--c-primary); }
+        /* Bulk move bar */
+        .bulk-bar { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 150; background: var(--c-surface); border: 1px solid var(--c-primary); border-radius: 10px; padding: 10px 20px; display: none; align-items: center; gap: 14px; box-shadow: 0 4px 24px rgba(0,0,0,0.5); }
+        .bulk-bar.active { display: flex; }
+        .bulk-bar .bulk-count { font-size: 0.85rem; font-weight: 600; color: var(--c-primary); }
+        .bulk-bar .btn-bulk-move { background: var(--c-primary); color: #fff; border: none; border-radius: 6px; padding: 8px 16px; font-size: 0.82rem; cursor: pointer; font-weight: 600; }
+        .bulk-bar .btn-bulk-move:hover { opacity: 0.85; }
+        .bulk-bar .btn-bulk-cancel { background: none; border: 1px solid var(--c-border); color: var(--c-muted); border-radius: 6px; padding: 8px 12px; font-size: 0.82rem; cursor: pointer; }
+        .bulk-bar .btn-bulk-cancel:hover { border-color: var(--c-error); color: var(--c-error); }
+        .bulk-check { width: 16px; height: 16px; accent-color: var(--c-primary); cursor: pointer; }
 
         /* ---- Alerts ---- */
         .alert { padding: 10px 14px; border-radius: 6px; font-size: 0.83rem; margin-bottom: 16px; display: none; }
@@ -391,8 +400,8 @@
                 <div class="card">
                     <div class="table-wrap">
                         <table>
-                            <thead><tr><th style="width:30px"></th><th>Titulo</th><th>ID</th><th>Fuente</th><th>Estado</th><th>Fecha</th><th>Acciones</th></tr></thead>
-                            <tbody id="catalog-body"><tr><td colspan="7" style="color:var(--c-muted)">Cargando...</td></tr></tbody>
+                            <thead><tr><th style="width:30px"><input type="checkbox" class="bulk-check" id="bulk-select-all" onchange="toggleSelectAll(this)"></th><th style="width:30px"></th><th>Titulo</th><th>ID</th><th>Fuente</th><th>Estado</th><th>Fecha</th><th>Acciones</th></tr></thead>
+                            <tbody id="catalog-body"><tr><td colspan="8" style="color:var(--c-muted)">Cargando...</td></tr></tbody>
                         </table>
                     </div>
                     <button class="btn btn-ghost" onclick="loadCourseVideos(currentCourseId)" style="margin-top:14px;font-size:0.8rem">Actualizar</button>
@@ -414,7 +423,14 @@
         </div>
 
         <!-- Modal: Mover video a curso -->
-        <div id="move-video-modal-bg" class="move-modal-bg">
+        <!-- Bulk move bar -->
+    <div id="bulk-bar" class="bulk-bar">
+        <span class="bulk-count" id="bulk-count">0 seleccionados</span>
+        <button class="btn-bulk-move" onclick="openBulkMoveModal()">Mover seleccionados</button>
+        <button class="btn-bulk-cancel" onclick="clearBulkSelection()">Cancelar</button>
+    </div>
+
+    <div id="move-video-modal-bg" class="move-modal-bg">
             <div class="move-modal">
                 <h3>Mover video a curso</h3>
                 <p style="color:var(--c-muted);font-size:0.8rem;margin-bottom:12px" id="move-video-title"></p>
@@ -771,6 +787,8 @@ let editingCourseId = null;
 let allCoursesCache = [];
 let moveVideoId = null;
 let dragSrcRow = null;
+let bulkSelectedIds = new Set();
+let isBulkMove = false;
 
 async function loadCourses() {
     const grid = $('courses-grid');
@@ -827,7 +845,8 @@ async function openCourse(courseId) {
 
 async function loadCourseVideos(courseId) {
     const tbody = $('catalog-body');
-    tbody.innerHTML = '<tr><td colspan="7" style="color:var(--c-muted)">Cargando...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" style="color:var(--c-muted)">Cargando...</td></tr>';
+    clearBulkSelection();
     try {
         const url = courseId === '__unassigned__'
             ? '/api/courses/unassigned/videos'
@@ -835,7 +854,7 @@ async function loadCourseVideos(courseId) {
         const data = await api('GET', url);
         const videos = data.videos || [];
         if (!videos.length) {
-            tbody.innerHTML = '<tr><td colspan="7" style="color:var(--c-muted)">No hay videos en este curso.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8" style="color:var(--c-muted)">No hay videos en este curso.</td></tr>';
             return;
         }
         const base = window.location.origin;
@@ -851,6 +870,7 @@ async function loadCourseVideos(courseId) {
                 : '';
             return `<tr draggable="true" data-videoid="${esc(v.videoId)}" data-idx="${i}"
                 ondragstart="dragStart(event)" ondragover="dragOver(event)" ondrop="dropRow(event)" ondragend="dragEnd(event)">
+                <td><input type="checkbox" class="bulk-check row-check" data-vid="${esc(v.videoId)}" onchange="toggleRowCheck(this)"></td>
                 <td><span class="sort-handle">&#9776;</span></td>
                 <td>${esc(v.title || v.videoId)}</td>
                 <td style="font-family:monospace;font-size:0.75rem">${esc(v.videoId.slice(0,8)+'...')}</td>
@@ -947,12 +967,64 @@ function openMoveModal(videoId, title) {
     $('move-course-list').innerHTML = html;
     $('move-video-modal-bg').classList.add('active');
 }
-function closeMoveModal() { $('move-video-modal-bg').classList.remove('active'); moveVideoId = null; }
+function closeMoveModal() { $('move-video-modal-bg').classList.remove('active'); moveVideoId = null; isBulkMove = false; }
 async function moveVideo(courseId) {
+    if (isBulkMove) { return bulkMoveToTarget(courseId); }
     if (!moveVideoId) return;
     try {
         await api('POST', '/api/courses/move-video', { videoId: moveVideoId, courseId });
         closeMoveModal();
+        loadCourseVideos(currentCourseId);
+    } catch (err) { alert('Error: ' + err.message); }
+}
+
+// ---- Bulk selection & move ----
+function toggleRowCheck(cb) {
+    const vid = cb.dataset.vid;
+    if (cb.checked) bulkSelectedIds.add(vid); else bulkSelectedIds.delete(vid);
+    updateBulkBar();
+}
+function toggleSelectAll(cb) {
+    document.querySelectorAll('.row-check').forEach(c => { c.checked = cb.checked; if (cb.checked) bulkSelectedIds.add(c.dataset.vid); else bulkSelectedIds.delete(c.dataset.vid); });
+    updateBulkBar();
+}
+function updateBulkBar() {
+    const n = bulkSelectedIds.size;
+    const bar = $('bulk-bar');
+    if (n > 0) { bar.classList.add('active'); $('bulk-count').textContent = n + ' seleccionado' + (n > 1 ? 's' : ''); }
+    else { bar.classList.remove('active'); }
+    const allCbs = document.querySelectorAll('.row-check');
+    const selectAll = $('bulk-select-all');
+    if (selectAll) selectAll.checked = allCbs.length > 0 && bulkSelectedIds.size === allCbs.length;
+}
+function clearBulkSelection() {
+    bulkSelectedIds.clear();
+    document.querySelectorAll('.row-check').forEach(c => c.checked = false);
+    const sa = $('bulk-select-all'); if (sa) sa.checked = false;
+    $('bulk-bar').classList.remove('active');
+}
+function openBulkMoveModal() {
+    if (!bulkSelectedIds.size) return;
+    isBulkMove = true;
+    $('move-video-title').textContent = bulkSelectedIds.size + ' video' + (bulkSelectedIds.size > 1 ? 's' : '') + ' seleccionado' + (bulkSelectedIds.size > 1 ? 's' : '');
+    let html = '';
+    for (const c of allCoursesCache) {
+        if (c.id === currentCourseId) continue;
+        html += `<button class="course-option" onclick="moveVideo('${esc(c.id)}')">${esc(c.name)}</button>`;
+    }
+    if (currentCourseId !== '__unassigned__') {
+        html += `<button class="course-option" onclick="moveVideo(null)" style="color:var(--c-muted)">Sin asignar</button>`;
+    }
+    if (!html) html = '<p style="color:var(--c-muted)">No hay otros cursos. Crea uno primero.</p>';
+    $('move-course-list').innerHTML = html;
+    $('move-video-modal-bg').classList.add('active');
+}
+async function bulkMoveToTarget(courseId) {
+    const ids = Array.from(bulkSelectedIds);
+    try {
+        await api('POST', '/api/courses/bulk-move', { videoIds: ids, courseId });
+        closeMoveModal();
+        clearBulkSelection();
         loadCourseVideos(currentCourseId);
     } catch (err) { alert('Error: ' + err.message); }
 }
