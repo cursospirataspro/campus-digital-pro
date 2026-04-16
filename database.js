@@ -32,6 +32,8 @@ db.pragma('foreign_keys = ON');
 // Migraciones no destructivas (columnas nuevas en tablas existentes)
 try { db.exec("ALTER TABLE catalog ADD COLUMN source_type TEXT NOT NULL DEFAULT 'local'"); } catch {}
 try { db.exec('ALTER TABLE catalog ADD COLUMN bunny_url TEXT'); } catch {}
+try { db.exec('ALTER TABLE catalog ADD COLUMN course_id TEXT'); } catch {}
+try { db.exec('ALTER TABLE catalog ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0'); } catch {}
 
 // ================================================================
 //  ESQUEMA
@@ -89,6 +91,15 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user ON active_sessions(user_id);
 CREATE TABLE IF NOT EXISTS allowed_domains (
     domain TEXT PRIMARY KEY
 );
+
+CREATE TABLE IF NOT EXISTS courses (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    author     TEXT NOT NULL DEFAULT '',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_catalog_course ON catalog(course_id);
 `);
 
 // ================================================================
@@ -129,14 +140,26 @@ const stmts = {
     // --- Catalog ---
     getCatalogAll:        db.prepare('SELECT * FROM catalog ORDER BY uploaded_at DESC'),
     getCatalogById:       db.prepare('SELECT * FROM catalog WHERE video_id = ?'),
+    getCatalogByCourse:   db.prepare('SELECT * FROM catalog WHERE course_id = ? ORDER BY sort_order ASC, uploaded_at DESC'),
+    getCatalogUnassigned: db.prepare('SELECT * FROM catalog WHERE course_id IS NULL ORDER BY uploaded_at DESC'),
     insertCatalog:        db.prepare(`
-        INSERT OR REPLACE INTO catalog (video_id, title, status, segment_count, key_id, error, uploaded_at, source_type, bunny_url)
-        VALUES (@video_id, @title, @status, @segment_count, @key_id, @error, @uploaded_at, @source_type, @bunny_url)
+        INSERT OR REPLACE INTO catalog (video_id, title, status, segment_count, key_id, error, uploaded_at, source_type, bunny_url, course_id, sort_order)
+        VALUES (@video_id, @title, @status, @segment_count, @key_id, @error, @uploaded_at, @source_type, @bunny_url, @course_id, @sort_order)
     `),
     updateCatalogStatus:  db.prepare(`
         UPDATE catalog SET status=@status, segment_count=@segment_count, key_id=@key_id, error=@error WHERE video_id=@video_id
     `),
+    updateCatalogCourse:  db.prepare('UPDATE catalog SET course_id = ?, sort_order = ? WHERE video_id = ?'),
+    updateCatalogSort:    db.prepare('UPDATE catalog SET sort_order = ? WHERE video_id = ?'),
     deleteCatalog:        db.prepare('DELETE FROM catalog WHERE video_id = ?'),
+
+    // --- Courses ---
+    getAllCourses:        db.prepare('SELECT * FROM courses ORDER BY sort_order ASC, created_at DESC'),
+    getCourseById:        db.prepare('SELECT * FROM courses WHERE id = ?'),
+    insertCourse:         db.prepare('INSERT INTO courses (id, name, author, sort_order, created_at) VALUES (@id, @name, @author, @sort_order, @created_at)'),
+    updateCourse:         db.prepare('UPDATE courses SET name = @name, author = @author WHERE id = @id'),
+    deleteCourse:         db.prepare('DELETE FROM courses WHERE id = ?'),
+    unassignCourseVideos: db.prepare('UPDATE catalog SET course_id = NULL WHERE course_id = ?'),
 
     // --- Sessions ---
     insertSession:        db.prepare('INSERT INTO active_sessions (session_id, user_id, video_id, started_at, last_seen) VALUES (?, ?, ?, ?, ?)'),
@@ -320,6 +343,8 @@ function rowToCatalog(r) {
         uploadedAt:   r.uploaded_at,
         sourceType:   r.source_type || 'local',
         bunnyUrl:     r.bunny_url || null,
+        courseId:     r.course_id || null,
+        sortOrder:    r.sort_order || 0,
     };
 }
 
@@ -329,7 +354,7 @@ module.exports.loadCatalog = () =>
 module.exports.getCatalogById = (videoId) =>
     rowToCatalog(stmts.getCatalogById.get(videoId));
 
-module.exports.addToCatalog = ({ videoId, title, status, segmentCount, keyId, error, uploadedAt, sourceType, bunnyUrl }) => {
+module.exports.addToCatalog = ({ videoId, title, status, segmentCount, keyId, error, uploadedAt, sourceType, bunnyUrl, courseId, sortOrder }) => {
     stmts.insertCatalog.run({
         video_id:      videoId,
         title:         title || videoId,
@@ -340,6 +365,8 @@ module.exports.addToCatalog = ({ videoId, title, status, segmentCount, keyId, er
         uploaded_at:   uploadedAt || new Date().toISOString(),
         source_type:   sourceType || 'local',
         bunny_url:     bunnyUrl || null,
+        course_id:     courseId || null,
+        sort_order:    sortOrder || 0,
     });
 };
 
@@ -383,6 +410,8 @@ module.exports.deleteCatalogEntry = (videoId) =>
                     uploaded_at:   e.uploadedAt || new Date().toISOString(),
                     source_type:   e.sourceType || 'bunny',
                     bunny_url:     e.bunnyUrl,
+                    course_id:     e.courseId || null,
+                    sort_order:    e.sortOrder || 0,
                 });
                 console.log('[db] Catálogo seed:', e.videoId, e.title);
             } catch (err) {
@@ -455,3 +484,53 @@ module.exports.addAllowedDomain = (domain) =>
 
 module.exports.removeAllowedDomain = (domain) =>
     db.prepare('DELETE FROM allowed_domains WHERE domain = ?').run(domain);
+
+// ================================================================
+//  API — COURSES
+// ================================================================
+
+function rowToCourse(r) {
+    if (!r) return null;
+    return { id: r.id, name: r.name, author: r.author, sortOrder: r.sort_order, createdAt: r.created_at };
+}
+
+module.exports.getAllCourses = () =>
+    stmts.getAllCourses.all().map(rowToCourse);
+
+module.exports.getCourseById = (id) =>
+    rowToCourse(stmts.getCourseById.get(id));
+
+module.exports.createCourse = ({ id, name, author, sortOrder }) => {
+    stmts.insertCourse.run({ id, name, author: author || '', sort_order: sortOrder || 0, created_at: new Date().toISOString() });
+    return rowToCourse(stmts.getCourseById.get(id));
+};
+
+module.exports.updateCourse = (id, { name, author }) => {
+    stmts.updateCourse.run({ id, name, author: author || '' });
+    return rowToCourse(stmts.getCourseById.get(id));
+};
+
+module.exports.deleteCourse = (id) => {
+    stmts.unassignCourseVideos.run(id);
+    stmts.deleteCourse.run(id);
+};
+
+module.exports.moveVideoToCourse = (videoId, courseId) => {
+    const maxSort = db.prepare('SELECT COALESCE(MAX(sort_order),0) as m FROM catalog WHERE course_id = ?').get(courseId || null);
+    stmts.updateCatalogCourse.run(courseId || null, (maxSort?.m || 0) + 1, videoId);
+};
+
+module.exports.reorderVideos = (videoOrders) => {
+    const tx = db.transaction((items) => {
+        for (const { videoId, sortOrder } of items) {
+            stmts.updateCatalogSort.run(sortOrder, videoId);
+        }
+    });
+    tx(videoOrders);
+};
+
+module.exports.getCatalogByCourse = (courseId) =>
+    stmts.getCatalogByCourse.all(courseId).map(rowToCatalog);
+
+module.exports.getCatalogUnassigned = () =>
+    stmts.getCatalogUnassigned.all().map(rowToCatalog);

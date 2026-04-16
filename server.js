@@ -63,7 +63,8 @@ function syncCatalogSeed() {
         const seed = JSON.stringify(catalog.map(v => ({
             videoId: v.videoId, title: v.title, sourceType: v.sourceType || 'bunny',
             status: v.status || 'ready', bunnyUrl: v.bunnyUrl || null,
-            keyId: v.keyId || null, uploadedAt: v.uploadedAt
+            keyId: v.keyId || null, uploadedAt: v.uploadedAt,
+            courseId: v.courseId || null, sortOrder: v.sortOrder || 0
         })));
         // GET existing env vars
         const getOpts = { hostname: 'api.render.com', path: `/v1/services/${RENDER_SERVICE_ID}/env-vars`,
@@ -845,6 +846,77 @@ app.delete('/api/allowed-domains', requireAdmin, (req, res) => {
     db.removeAllowedDomain(domain);
     syncDomainsSeed();
     res.json({ ok: true, domains: db.getAllowedDomains() });
+});
+
+// ================================================================
+//  RUTAS: CURSOS [ADMIN]
+// ================================================================
+
+/** GET /api/courses — Lista todos los cursos con conteo de videos */
+app.get('/api/courses', requireAdmin, (req, res) => {
+    const courses = db.getAllCourses();
+    const catalog = db.loadCatalog();
+    const result = courses.map(c => ({
+        ...c,
+        videoCount: catalog.filter(v => v.courseId === c.id).length,
+    }));
+    const unassigned = catalog.filter(v => !v.courseId).length;
+    res.json({ courses: result, unassignedCount: unassigned });
+});
+
+/** POST /api/courses — Crea un curso */
+app.post('/api/courses', requireAdmin, (req, res) => {
+    const { name, author } = req.body || {};
+    if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name requerido' });
+    const id = uuidv4();
+    const course = db.createCourse({ id, name: name.trim().slice(0, 120), author: (author || '').trim().slice(0, 100) });
+    res.status(201).json(course);
+});
+
+/** PUT /api/courses/:id — Actualiza nombre/autor */
+app.put('/api/courses/:id', requireAdmin, (req, res) => {
+    const { name, author } = req.body || {};
+    if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name requerido' });
+    const course = db.updateCourse(req.params.id, { name: name.trim().slice(0, 120), author: (author || '').trim().slice(0, 100) });
+    if (!course) return res.status(404).json({ error: 'Curso no encontrado' });
+    res.json(course);
+});
+
+/** DELETE /api/courses/:id — Elimina un curso (videos quedan sin asignar) */
+app.delete('/api/courses/:id', requireAdmin, (req, res) => {
+    db.deleteCourse(req.params.id);
+    syncCatalogSeed();
+    res.json({ ok: true });
+});
+
+/** GET /api/courses/:id/videos — Videos de un curso */
+app.get('/api/courses/:id/videos', requireAdmin, (req, res) => {
+    const videos = db.getCatalogByCourse(req.params.id);
+    res.json({ videos });
+});
+
+/** GET /api/courses/unassigned/videos — Videos sin curso */
+app.get('/api/courses/unassigned/videos', requireAdmin, (req, res) => {
+    const videos = db.getCatalogUnassigned();
+    res.json({ videos });
+});
+
+/** POST /api/courses/move-video — Mover video a un curso */
+app.post('/api/courses/move-video', requireAdmin, (req, res) => {
+    const { videoId, courseId } = req.body || {};
+    if (!videoId) return res.status(400).json({ error: 'videoId requerido' });
+    db.moveVideoToCourse(videoId, courseId || null);
+    syncCatalogSeed();
+    res.json({ ok: true });
+});
+
+/** POST /api/courses/reorder — Reordenar videos dentro de un curso */
+app.post('/api/courses/reorder', requireAdmin, (req, res) => {
+    const { orders } = req.body || {};
+    if (!Array.isArray(orders)) return res.status(400).json({ error: 'orders requerido (array)' });
+    db.reorderVideos(orders);
+    syncCatalogSeed();
+    res.json({ ok: true });
 });
 
 /**

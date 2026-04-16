@@ -164,6 +164,50 @@
         }
         .btn-gear:hover { color: var(--c-primary); border-color: var(--c-primary); }
 
+        /* ---- Courses ---- */
+        .courses-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; margin-bottom: 18px; }
+        .course-card {
+            background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 10px;
+            padding: 16px; cursor: pointer; transition: border-color 0.2s, transform 0.15s;
+        }
+        .course-card:hover { border-color: var(--c-primary); transform: translateY(-2px); }
+        .course-card .cc-name { font-size: 1rem; font-weight: 600; color: var(--c-fg); margin-bottom: 2px; }
+        .course-card .cc-author { font-size: 0.78rem; color: var(--c-muted); margin-bottom: 8px; }
+        .course-card .cc-count { font-size: 0.75rem; color: var(--c-primary); }
+        .course-card .cc-actions { display: flex; gap: 6px; margin-top: 10px; }
+        .course-card .cc-actions button {
+            background: none; border: 1px solid var(--c-border); color: var(--c-muted);
+            border-radius: 4px; padding: 3px 8px; font-size: 0.7rem; cursor: pointer;
+        }
+        .course-card .cc-actions button:hover { color: var(--c-fg); border-color: var(--c-fg); }
+        .course-card .cc-actions .btn-del:hover { color: var(--c-error); border-color: var(--c-error); }
+        .course-header { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+        .course-header .back-btn {
+            background: none; border: 1px solid var(--c-border); color: var(--c-muted);
+            border-radius: 6px; padding: 6px 12px; cursor: pointer; font-size: 0.82rem;
+        }
+        .course-header .back-btn:hover { color: var(--c-primary); border-color: var(--c-primary); }
+        .sort-handle { cursor: grab; color: var(--c-muted); font-size: 1.1rem; user-select: none; padding: 0 6px; }
+        .sort-handle:active { cursor: grabbing; }
+        tr.dragging { opacity: 0.4; }
+        .move-modal-bg {
+            position: fixed; inset: 0; z-index: 200;
+            background: rgba(0,0,0,0.65); display: none;
+            align-items: center; justify-content: center; padding: 16px;
+        }
+        .move-modal-bg.active { display: flex; }
+        .move-modal {
+            background: var(--c-surface); border: 1px solid var(--c-border);
+            border-radius: 12px; padding: 24px; width: 100%; max-width: 420px;
+        }
+        .move-modal h3 { margin-bottom: 10px; }
+        .move-modal .course-option {
+            display: block; width: 100%; text-align: left; background: none;
+            border: 1px solid var(--c-border); color: var(--c-fg); border-radius: 6px;
+            padding: 10px 14px; cursor: pointer; margin-bottom: 6px; font-size: 0.85rem;
+        }
+        .move-modal .course-option:hover { border-color: var(--c-primary); color: var(--c-primary); }
+
         /* ---- Alerts ---- */
         .alert { padding: 10px 14px; border-radius: 6px; font-size: 0.83rem; margin-bottom: 16px; display: none; }
         .alert-ok    { background: rgba(46,204,113,0.1); color: var(--c-success); border: 1px solid rgba(46,204,113,0.2); }
@@ -301,40 +345,81 @@
             <h2>Catalogo de Videos</h2>
             <p class="subtitle">Videos procesados y listos para reproduccion.</p>
 
-            <!-- Dominios permitidos -->
-            <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
+            <!-- Botones superiores -->
+            <div style="display:flex;justify-content:flex-end;gap:10px;margin-bottom:10px">
+                <button class="btn-gear" onclick="openCreateCourseModal()">&#128218; Crear curso</button>
                 <button class="btn-gear" onclick="openDomainsModal()">&#9881; Dominios permitidos</button>
             </div>
 
-            <!-- Agregar video de Bunny.net -->
-            <div class="card" style="margin-bottom:16px">
-                <h3>Agregar video de Bunny.net</h3>
-                <p style="font-size:0.8rem;color:var(--c-muted);margin-bottom:12px">
-                    Pega la URL HLS de Bunny Stream. Ejemplo:<br>
-                    <code style="background:#222;padding:2px 6px;border-radius:3px;font-size:0.78rem">https://vz-XXXXXX.b-cdn.net/VIDEO-ID/playlist.m3u8</code>
-                </p>
-                <div style="display:grid;grid-template-columns:2fr 3fr auto;gap:10px;align-items:end">
-                    <div class="form-row" style="margin:0">
-                        <label>Titulo del video *</label>
-                        <input type="text" id="bunny-title" maxlength="120" placeholder="Ej: Clase 1 &mdash; Introduccion">
-                    </div>
-                    <div class="form-row" style="margin:0">
-                        <label>URL HLS de Bunny.net *</label>
-                        <input type="url" id="bunny-url" placeholder="https://vz-XXXXXX.b-cdn.net/.../.m3u8">
-                    </div>
-                    <button class="btn btn-red" id="btn-add-bunny" style="height:38px">Agregar</button>
+            <!-- Vista de cursos (por defecto) -->
+            <div id="courses-view">
+                <div id="courses-grid" class="courses-grid">
+                    <p style="color:var(--c-muted)">Cargando cursos...</p>
                 </div>
-                <span id="bunny-msg" style="font-size:0.8rem;display:block;margin-top:8px"></span>
             </div>
 
-            <div class="card">
-                <div class="table-wrap">
-                    <table>
-                        <thead><tr><th>Titulo</th><th>ID</th><th>Fuente</th><th>Estado</th><th>Segmentos</th><th>Fecha</th><th>Acciones</th></tr></thead>
-                        <tbody id="catalog-body"><tr><td colspan="7" style="color:var(--c-muted)">Cargando...</td></tr></tbody>
-                    </table>
+            <!-- Vista dentro de un curso -->
+            <div id="course-detail-view" style="display:none">
+                <div class="course-header">
+                    <button class="back-btn" onclick="showCoursesView()">&#8592; Volver a cursos</button>
+                    <div>
+                        <h3 id="course-detail-name" style="margin:0"></h3>
+                        <span id="course-detail-author" style="color:var(--c-muted);font-size:0.8rem"></span>
+                    </div>
                 </div>
-                <button class="btn btn-ghost" onclick="loadCatalog()" style="margin-top:14px;font-size:0.8rem">Actualizar</button>
+                <!-- Agregar video de Bunny.net (dentro del curso) -->
+                <div class="card" style="margin-bottom:16px">
+                    <h3>Agregar video de Bunny.net</h3>
+                    <p style="font-size:0.8rem;color:var(--c-muted);margin-bottom:12px">
+                        Pega la URL HLS de Bunny Stream. Ejemplo:<br>
+                        <code style="background:#222;padding:2px 6px;border-radius:3px;font-size:0.78rem">https://vz-XXXXXX.b-cdn.net/VIDEO-ID/playlist.m3u8</code>
+                    </p>
+                    <div style="display:grid;grid-template-columns:2fr 3fr auto;gap:10px;align-items:end">
+                        <div class="form-row" style="margin:0">
+                            <label>Titulo del video *</label>
+                            <input type="text" id="bunny-title" maxlength="120" placeholder="Ej: Clase 1 &mdash; Introduccion">
+                        </div>
+                        <div class="form-row" style="margin:0">
+                            <label>URL HLS de Bunny.net *</label>
+                            <input type="url" id="bunny-url" placeholder="https://vz-XXXXXX.b-cdn.net/.../.m3u8">
+                        </div>
+                        <button class="btn btn-red" id="btn-add-bunny" style="height:38px">Agregar</button>
+                    </div>
+                    <span id="bunny-msg" style="font-size:0.8rem;display:block;margin-top:8px"></span>
+                </div>
+
+                <div class="card">
+                    <div class="table-wrap">
+                        <table>
+                            <thead><tr><th style="width:30px"></th><th>Titulo</th><th>ID</th><th>Fuente</th><th>Estado</th><th>Fecha</th><th>Acciones</th></tr></thead>
+                            <tbody id="catalog-body"><tr><td colspan="7" style="color:var(--c-muted)">Cargando...</td></tr></tbody>
+                        </table>
+                    </div>
+                    <button class="btn btn-ghost" onclick="loadCourseVideos(currentCourseId)" style="margin-top:14px;font-size:0.8rem">Actualizar</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Modal: Crear/editar curso -->
+        <div id="create-course-modal-bg" class="move-modal-bg">
+            <div class="move-modal">
+                <h3 id="course-modal-title">Crear curso</h3>
+                <div class="form-row"><label>Nombre del curso *</label><input type="text" id="course-name-input" maxlength="120" placeholder="Ej: Trading Profesional"></div>
+                <div class="form-row"><label>Autor</label><input type="text" id="course-author-input" maxlength="100" placeholder="Ej: Victor Gomez"></div>
+                <div style="display:flex;gap:8px;margin-top:14px">
+                    <button class="btn btn-red" id="course-save-btn" onclick="saveCourse()">Guardar</button>
+                    <button class="btn btn-ghost" onclick="closeCreateCourseModal()">Cancelar</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Modal: Mover video a curso -->
+        <div id="move-video-modal-bg" class="move-modal-bg">
+            <div class="move-modal">
+                <h3>Mover video a curso</h3>
+                <p style="color:var(--c-muted);font-size:0.8rem;margin-bottom:12px" id="move-video-title"></p>
+                <div id="move-course-list"></div>
+                <button class="btn btn-ghost" onclick="closeMoveModal()" style="margin-top:10px;width:100%">Cancelar</button>
             </div>
         </div>
 
@@ -679,17 +764,83 @@ $('btn-upload').addEventListener('click', async () => {
 });
 
 // ================================================================
-//  CATALOGO
+//  CATALOGO — CURSOS
 // ================================================================
-async function loadCatalog() {
+let currentCourseId = null;
+let editingCourseId = null;
+let allCoursesCache = [];
+let moveVideoId = null;
+let dragSrcRow = null;
+
+async function loadCourses() {
+    const grid = $('courses-grid');
+    grid.innerHTML = '<p style="color:var(--c-muted)">Cargando cursos...</p>';
+    try {
+        const data = await api('GET', '/api/courses');
+        allCoursesCache = data.courses || [];
+        const unassigned = data.unassignedCount || 0;
+        let html = '';
+        for (const c of allCoursesCache) {
+            html += `<div class="course-card" onclick="openCourse('${esc(c.id)}')">
+                <div class="cc-name">${esc(c.name)}</div>
+                <div class="cc-author">${esc(c.author || 'Sin autor')}</div>
+                <div class="cc-count">${c.videoCount} video${c.videoCount !== 1 ? 's' : ''}</div>
+                <div class="cc-actions" onclick="event.stopPropagation()">
+                    <button onclick="editCourse('${esc(c.id)}')">Editar</button>
+                    <button class="btn-del" onclick="deleteCourse('${esc(c.id)}','${esc(c.name)}')">Eliminar</button>
+                </div>
+            </div>`;
+        }
+        if (unassigned > 0) {
+            html += `<div class="course-card" style="border-style:dashed" onclick="openCourse('__unassigned__')">
+                <div class="cc-name">Sin asignar</div>
+                <div class="cc-author">Videos sin curso</div>
+                <div class="cc-count">${unassigned} video${unassigned !== 1 ? 's' : ''}</div>
+            </div>`;
+        }
+        if (!html) html = '<p style="color:var(--c-muted)">No hay cursos. Crea uno con el boton de arriba.</p>';
+        grid.innerHTML = html;
+    } catch (err) { grid.innerHTML = `<p style="color:var(--c-error)">${esc(err.message)}</p>`; }
+}
+
+function showCoursesView() {
+    currentCourseId = null;
+    $('courses-view').style.display = '';
+    $('course-detail-view').style.display = 'none';
+    loadCourses();
+}
+
+async function openCourse(courseId) {
+    currentCourseId = courseId;
+    $('courses-view').style.display = 'none';
+    $('course-detail-view').style.display = '';
+    if (courseId === '__unassigned__') {
+        $('course-detail-name').textContent = 'Videos sin asignar';
+        $('course-detail-author').textContent = '';
+    } else {
+        const c = allCoursesCache.find(x => x.id === courseId);
+        $('course-detail-name').textContent = c ? c.name : 'Curso';
+        $('course-detail-author').textContent = c ? (c.author || '') : '';
+    }
+    loadCourseVideos(courseId);
+}
+
+async function loadCourseVideos(courseId) {
     const tbody = $('catalog-body');
     tbody.innerHTML = '<tr><td colspan="7" style="color:var(--c-muted)">Cargando...</td></tr>';
     try {
-        const { catalog } = await api('GET', '/api/video/catalog');
-        if (!catalog.length) { tbody.innerHTML = '<tr><td colspan="7" style="color:var(--c-muted)">No hay videos aun. Sube uno o agrega un link de Bunny.net.</td></tr>'; return; }
+        const url = courseId === '__unassigned__'
+            ? '/api/courses/unassigned/videos'
+            : `/api/courses/${courseId}/videos`;
+        const data = await api('GET', url);
+        const videos = data.videos || [];
+        if (!videos.length) {
+            tbody.innerHTML = '<tr><td colspan="7" style="color:var(--c-muted)">No hay videos en este curso.</td></tr>';
+            return;
+        }
         const base = window.location.origin;
-        tbody.innerHTML = catalog.map(v => {
-            const badge = v.status === 'ready'      ? '<span class="badge badge-ok">Listo</span>'
+        tbody.innerHTML = videos.map((v, i) => {
+            const badge = v.status === 'ready' ? '<span class="badge badge-ok">Listo</span>'
                         : v.status === 'processing' ? '<span class="badge badge-proc">Procesando</span>'
                         : '<span class="badge badge-error">Error</span>';
             const srcBadge = v.sourceType === 'bunny'
@@ -697,21 +848,116 @@ async function loadCatalog() {
                 : '<span style="background:#334155;color:#94a3b8;padding:2px 7px;border-radius:4px;font-size:0.7rem">Local</span>';
             const link = v.status === 'ready'
                 ? `<span class="copy-link" onclick="copyText('${esc(base + '/?v=' + v.videoId)}')" style="cursor:pointer">Copiar enlace</span>`
-                : '—';
-            const segs = v.sourceType === 'bunny' ? '—' : (v.segmentCount || '—');
-            return `<tr>
+                : '';
+            return `<tr draggable="true" data-videoid="${esc(v.videoId)}" data-idx="${i}"
+                ondragstart="dragStart(event)" ondragover="dragOver(event)" ondrop="dropRow(event)" ondragend="dragEnd(event)">
+                <td><span class="sort-handle">&#9776;</span></td>
                 <td>${esc(v.title || v.videoId)}</td>
                 <td style="font-family:monospace;font-size:0.75rem">${esc(v.videoId.slice(0,8)+'...')}</td>
                 <td>${srcBadge}</td>
                 <td>${badge}</td>
-                <td>${segs}</td>
                 <td>${new Date(v.uploadedAt).toLocaleDateString()}</td>
-                <td>${link} <button class="btn btn-ghost" style="padding:3px 8px;font-size:0.7rem;margin-left:6px" onclick="deleteVideo('${esc(v.videoId)}')">Eliminar</button></td>
+                <td>
+                    ${link}
+                    <button class="btn btn-ghost" style="padding:3px 8px;font-size:0.7rem;margin-left:4px" onclick="openMoveModal('${esc(v.videoId)}','${esc(v.title || v.videoId)}')">Mover</button>
+                    <button class="btn btn-ghost" style="padding:3px 8px;font-size:0.7rem;margin-left:4px" onclick="deleteVideo('${esc(v.videoId)}')">Eliminar</button>
+                </td>
             </tr>`;
         }).join('');
     } catch (err) { tbody.innerHTML = `<tr><td colspan="7" style="color:var(--c-error)">${esc(err.message)}</td></tr>`; }
 }
 
+// Drag & drop reorder
+function dragStart(e) {
+    dragSrcRow = e.target.closest('tr');
+    dragSrcRow.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+}
+function dragOver(e) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }
+function dropRow(e) {
+    e.preventDefault();
+    const target = e.target.closest('tr');
+    if (!target || target === dragSrcRow) return;
+    const tbody = $('catalog-body');
+    const rows = [...tbody.querySelectorAll('tr[data-videoid]')];
+    const srcIdx = rows.indexOf(dragSrcRow);
+    const tgtIdx = rows.indexOf(target);
+    if (srcIdx < tgtIdx) target.after(dragSrcRow);
+    else target.before(dragSrcRow);
+    saveRowOrder();
+}
+function dragEnd() { if (dragSrcRow) dragSrcRow.classList.remove('dragging'); dragSrcRow = null; }
+async function saveRowOrder() {
+    const rows = [...$('catalog-body').querySelectorAll('tr[data-videoid]')];
+    const orders = rows.map((r, i) => ({ videoId: r.dataset.videoid, sortOrder: i + 1 }));
+    try { await api('POST', '/api/courses/reorder', { orders }); } catch {}
+}
+
+// Crear/editar curso
+function openCreateCourseModal() {
+    editingCourseId = null;
+    $('course-modal-title').textContent = 'Crear curso';
+    $('course-name-input').value = '';
+    $('course-author-input').value = '';
+    $('create-course-modal-bg').classList.add('active');
+}
+function closeCreateCourseModal() { $('create-course-modal-bg').classList.remove('active'); }
+function editCourse(id) {
+    const c = allCoursesCache.find(x => x.id === id);
+    if (!c) return;
+    editingCourseId = id;
+    $('course-modal-title').textContent = 'Editar curso';
+    $('course-name-input').value = c.name;
+    $('course-author-input').value = c.author || '';
+    $('create-course-modal-bg').classList.add('active');
+}
+async function saveCourse() {
+    const name = ($('course-name-input').value || '').trim();
+    const author = ($('course-author-input').value || '').trim();
+    if (!name) { alert('El nombre es requerido'); return; }
+    try {
+        if (editingCourseId) {
+            await api('PUT', '/api/courses/' + editingCourseId, { name, author });
+        } else {
+            await api('POST', '/api/courses', { name, author });
+        }
+        closeCreateCourseModal();
+        loadCourses();
+    } catch (err) { alert('Error: ' + err.message); }
+}
+async function deleteCourse(id, name) {
+    if (!confirm('Eliminar curso "' + name + '"? Los videos NO se borran, quedan sin asignar.')) return;
+    try { await api('DELETE', '/api/courses/' + id); loadCourses(); }
+    catch (err) { alert('Error: ' + err.message); }
+}
+
+// Mover video
+function openMoveModal(videoId, title) {
+    moveVideoId = videoId;
+    $('move-video-title').textContent = title;
+    let html = '';
+    for (const c of allCoursesCache) {
+        if (c.id === currentCourseId) continue;
+        html += `<button class="course-option" onclick="moveVideo('${esc(c.id)}')">${esc(c.name)}</button>`;
+    }
+    if (currentCourseId !== '__unassigned__') {
+        html += `<button class="course-option" onclick="moveVideo(null)" style="color:var(--c-muted)">Sin asignar</button>`;
+    }
+    if (!html) html = '<p style="color:var(--c-muted)">No hay otros cursos. Crea uno primero.</p>';
+    $('move-course-list').innerHTML = html;
+    $('move-video-modal-bg').classList.add('active');
+}
+function closeMoveModal() { $('move-video-modal-bg').classList.remove('active'); moveVideoId = null; }
+async function moveVideo(courseId) {
+    if (!moveVideoId) return;
+    try {
+        await api('POST', '/api/courses/move-video', { videoId: moveVideoId, courseId });
+        closeMoveModal();
+        loadCourseVideos(currentCourseId);
+    } catch (err) { alert('Error: ' + err.message); }
+}
+
+// Agregar video (ahora asociado al curso actual)
 async function addBunnyVideo() {
     const title = ($('bunny-title').value || '').trim();
     const bunnyUrl = ($('bunny-url').value || '').trim();
@@ -723,11 +969,15 @@ async function addBunnyVideo() {
     $('btn-add-bunny').disabled = true;
     try {
         const result = await api('POST', '/api/catalog/add-bunny', { title, bunnyUrl });
+        // Mover al curso actual si estamos dentro de uno
+        if (currentCourseId && currentCourseId !== '__unassigned__') {
+            await api('POST', '/api/courses/move-video', { videoId: result.videoId, courseId: currentCourseId });
+        }
         msg.textContent = `Video agregado correctamente (ID: ${result.videoId.slice(0,8)}...)`;
         msg.style.color = 'var(--c-ok)';
         $('bunny-title').value = '';
         $('bunny-url').value = '';
-        loadCatalog();
+        loadCourseVideos(currentCourseId);
     } catch (err) {
         msg.textContent = 'Error: ' + err.message;
         msg.style.color = 'var(--c-error)';
@@ -740,9 +990,12 @@ async function deleteVideo(videoId) {
     if (!confirm('Eliminar video ' + videoId + '? Esta accion no se puede deshacer.')) return;
     try {
         await api('DELETE', '/api/video/' + videoId);
-        loadCatalog();
+        loadCourseVideos(currentCourseId);
     } catch (err) { alert('Error: ' + err.message); }
 }
+
+// Cargar catalogo legacy (para compatibilidad con el nav)
+function loadCatalog() { showCoursesView(); }
 
 // ================================================================
 //  DOMINIOS PERMITIDOS
