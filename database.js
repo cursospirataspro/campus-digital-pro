@@ -76,7 +76,9 @@ CREATE TABLE IF NOT EXISTS catalog (
     error         TEXT,
     uploaded_at   TEXT NOT NULL,
     source_type   TEXT NOT NULL DEFAULT 'local',
-    bunny_url     TEXT
+    bunny_url     TEXT,
+    course_id     TEXT,
+    sort_order    INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS active_sessions (
