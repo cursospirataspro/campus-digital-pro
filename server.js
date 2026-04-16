@@ -889,15 +889,15 @@ app.delete('/api/courses/:id', requireAdmin, (req, res) => {
     res.json({ ok: true });
 });
 
-/** GET /api/courses/:id/videos — Videos de un curso */
-app.get('/api/courses/:id/videos', requireAdmin, (req, res) => {
-    const videos = db.getCatalogByCourse(req.params.id);
+/** GET /api/courses/unassigned/videos — Videos sin curso (MUST be before :id route) */
+app.get('/api/courses/unassigned/videos', requireAdmin, (req, res) => {
+    const videos = db.getCatalogUnassigned();
     res.json({ videos });
 });
 
-/** GET /api/courses/unassigned/videos — Videos sin curso */
-app.get('/api/courses/unassigned/videos', requireAdmin, (req, res) => {
-    const videos = db.getCatalogUnassigned();
+/** GET /api/courses/:id/videos — Videos de un curso */
+app.get('/api/courses/:id/videos', requireAdmin, (req, res) => {
+    const videos = db.getCatalogByCourse(req.params.id);
     res.json({ videos });
 });
 
