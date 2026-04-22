@@ -2,10 +2,9 @@ services:
   - type: web
     name: campus-digital-pro
     runtime: node
-    plan: free
+    plan: starter
     buildCommand: npm install
     startCommand: node server.js
-    healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
         value: production
