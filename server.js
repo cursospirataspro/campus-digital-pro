@@ -60,28 +60,41 @@ function syncCatalogSeed() {
     if (!RENDER_API_KEY || !RENDER_SERVICE_ID) return;
     try {
         const catalog = db.loadCatalog();
-        const seed = JSON.stringify(catalog.map(v => ({
+        const entries = catalog.map(v => ({
             videoId: v.videoId, title: v.title, sourceType: v.sourceType || 'bunny',
             status: v.status || 'ready', bunnyUrl: v.bunnyUrl || null,
             keyId: v.keyId || null, uploadedAt: v.uploadedAt,
             courseId: v.courseId || null, sortOrder: v.sortOrder || 0
+        }));
+
+        const courses = db.getAllCourses ? db.getAllCourses() : [];
+        const coursesSeed = JSON.stringify(courses.map(c => ({
+            id: c.id, name: c.name, author: c.author || '', sortOrder: c.sortOrder || 0
         })));
-        // GET existing env vars
+
+        // Dividir catálogo en 2 partes para respetar límite OS de ~128KB por var
+        const half = Math.ceil(entries.length / 2);
+        const part1 = JSON.stringify(entries.slice(0, half));
+        const part2 = JSON.stringify(entries.slice(half));
+
         const getOpts = { hostname: 'api.render.com', path: `/v1/services/${RENDER_SERVICE_ID}/env-vars`,
             headers: { Authorization: `Bearer ${RENDER_API_KEY}`, Accept: 'application/json' } };
         https.get(getOpts, (res) => {
             let raw = ''; res.on('data', c => raw += c);
             res.on('end', () => {
                 try {
-                    const vars = JSON.parse(raw).map(v => ({ key: v.envVar.key, value: v.envVar.value }));
-                    const idx = vars.findIndex(v => v.key === 'CATALOG_SEED');
-                    if (idx >= 0) vars[idx].value = seed; else vars.push({ key: 'CATALOG_SEED', value: seed });
+                    // Filtrar vars viejas de catalog seed y courses seed
+                    let vars = JSON.parse(raw).map(v => ({ key: v.envVar.key, value: v.envVar.value }))
+                        .filter(v => !['CATALOG_SEED','CATALOG_SEED_1','CATALOG_SEED_2','CATALOG_SEED_3','COURSES_SEED'].includes(v.key));
+                    vars.push({ key: 'COURSES_SEED', value: coursesSeed });
+                    vars.push({ key: 'CATALOG_SEED_1', value: part1 });
+                    vars.push({ key: 'CATALOG_SEED_2', value: part2 });
                     const body = JSON.stringify(vars);
                     const putOpts = { hostname: 'api.render.com', path: `/v1/services/${RENDER_SERVICE_ID}/env-vars`,
                         method: 'PUT', headers: { Authorization: `Bearer ${RENDER_API_KEY}`, Accept: 'application/json', 'Content-Type': 'application/json' } };
                     const req = https.request(putOpts, (r2) => {
                         let d = ''; r2.on('data', c => d += c);
-                        r2.on('end', () => console.log(`[sync] CATALOG_SEED actualizado: ${catalog.length} videos`));
+                        r2.on('end', () => console.log(`[sync] Seeds actualizados: ${courses.length} cursos, ${catalog.length} videos`));
                     });
                     req.on('error', e => console.error('[sync] Error:', e.message));
                     req.write(body); req.end();
@@ -905,6 +918,23 @@ app.post('/api/courses', requireAdmin, (req, res) => {
     res.status(201).json(course);
 });
 
+/** POST /api/courses/restore-bulk — Restaura cursos preservando IDs originales */
+app.post('/api/courses/restore-bulk', requireAdmin, (req, res) => {
+    const { courses } = req.body || {};
+    if (!Array.isArray(courses)) return res.status(400).json({ error: 'courses array requerido' });
+    let inserted = 0, skipped = 0;
+    for (const c of courses) {
+        if (!c.id || !c.name) { skipped++; continue; }
+        try {
+            const existing = db.getCourseById(c.id);
+            if (existing) { skipped++; continue; }
+            db.createCourse({ id: c.id, name: c.name.slice(0, 120), author: (c.author || '').slice(0, 100) });
+            inserted++;
+        } catch { skipped++; }
+    }
+    res.json({ ok: true, inserted, skipped });
+});
+
 /** PUT /api/courses/:id — Actualiza nombre/autor */
 app.put('/api/courses/:id', requireAdmin, (req, res) => {
     const { name, author } = req.body || {};
@@ -912,6 +942,13 @@ app.put('/api/courses/:id', requireAdmin, (req, res) => {
     const course = db.updateCourse(req.params.id, { name: name.trim().slice(0, 120), author: (author || '').trim().slice(0, 100) });
     if (!course) return res.status(404).json({ error: 'Curso no encontrado' });
     res.json(course);
+});
+
+/** DELETE /api/courses/all — Elimina TODOS los cursos (solo en emergencia de restauración) */
+app.delete('/api/courses/all', requireAdmin, (req, res) => {
+    const courses = db.getAllCourses();
+    for (const c of courses) db.deleteCourse(c.id);
+    res.json({ ok: true, deleted: courses.length });
 });
 
 /** DELETE /api/courses/:id — Elimina un curso (videos quedan sin asignar) */

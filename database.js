@@ -420,16 +420,54 @@ module.exports.deleteCatalogEntry = (videoId) =>
     stmts.deleteCatalog.run(videoId);
 
 // ================================================================
-//  SEED DE CATÁLOGO DESDE ENV VAR
-//  Si CATALOG_SEED=<JSON> está definido, inserta los videos que
-//  no existan aún. Permite sobrevivir reinicios en Render free tier.
-//  Formato: JSON array de objetos con los mismos campos de addToCatalog.
+//  SEED DE CURSOS DESDE ENV VAR
+//  Si COURSES_SEED=<JSON> está definido, inserta los cursos preservando IDs.
 // ================================================================
-(function seedCatalogFromEnv() {
-    const raw = process.env.CATALOG_SEED;
+(function seedCoursesFromEnv() {
+    const raw = process.env.COURSES_SEED;
     if (!raw) return;
     let entries;
-    try { entries = JSON.parse(raw); } catch { console.error('[db] CATALOG_SEED JSON inválido'); return; }
+    try { entries = JSON.parse(raw); } catch { console.error('[db] COURSES_SEED JSON inválido'); return; }
+    if (!Array.isArray(entries)) return;
+    for (const c of entries) {
+        if (!c.id || !c.name) continue;
+        const existing = stmts.getCourseById.get(c.id);
+        if (!existing) {
+            try {
+                stmts.insertCourse.run({
+                    id:         c.id,
+                    name:       c.name,
+                    author:     c.author || '',
+                    sort_order: c.sortOrder || 0,
+                    created_at: c.createdAt || new Date().toISOString(),
+                });
+                console.log('[db] Curso seed:', c.id, c.name);
+            } catch (err) { console.error('[db] Error en curso seed:', err.message); }
+        }
+    }
+})();
+
+// ================================================================
+//  SEED DE CATÁLOGO DESDE ENV VAR
+//  Soporta CATALOG_SEED (array completo) o CATALOG_SEED_1 + CATALOG_SEED_2
+//  (partes divididas para evitar el límite de 128KB por variable del OS).
+// ================================================================
+(function seedCatalogFromEnv() {
+    let entries = [];
+    if (process.env.CATALOG_SEED) {
+        try { entries = JSON.parse(process.env.CATALOG_SEED); }
+        catch { console.error('[db] CATALOG_SEED JSON inválido'); return; }
+    } else {
+        const p1 = process.env.CATALOG_SEED_1;
+        const p2 = process.env.CATALOG_SEED_2;
+        const p3 = process.env.CATALOG_SEED_3;
+        if (!p1) return;
+        try {
+            if (p1) entries.push(...JSON.parse(p1));
+            if (p2) entries.push(...JSON.parse(p2));
+            if (p3) entries.push(...JSON.parse(p3));
+        } catch { console.error('[db] CATALOG_SEED_N JSON inválido'); return; }
+    }
     if (!Array.isArray(entries)) return;
     for (const e of entries) {
         if (!e.videoId || !e.bunnyUrl) continue;
@@ -449,12 +487,10 @@ module.exports.deleteCatalogEntry = (videoId) =>
                     course_id:     e.courseId || null,
                     sort_order:    e.sortOrder || 0,
                 });
-                console.log('[db] Catálogo seed:', e.videoId, e.title);
-            } catch (err) {
-                console.error('[db] Error en seed:', err.message);
-            }
+            } catch (err) { console.error('[db] Error en seed:', err.message); }
         }
     }
+    console.log('[db] Catálogo seed completado');
 })();
 
 // Seed de dominios permitidos desde env var
