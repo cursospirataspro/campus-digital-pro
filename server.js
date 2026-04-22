@@ -1081,7 +1081,7 @@ app.get('/api/bunny/videos', requireAdmin, async (req, res) => {
         let total = Infinity;
 
         while (allVideos.length < total) {
-            const data = await bunnyApiRequest(`/library/${libraryId}/videos?accessKey=${encodeURIComponent(apiKey)}&page=${page}&itemsPerPage=${perPage}&orderBy=title`);
+            const data = await bunnyApiRequest(`/library/${libraryId}/videos?page=${page}&itemsPerPage=${perPage}&orderBy=title`, { extraHeaders: { AccessKey: apiKey } });
             if (!data.items || !data.items.length) break;
             total = data.totalItems || data.items.length;
             allVideos.push(...data.items);
@@ -1112,6 +1112,23 @@ app.get('/api/bunny/videos', requireAdmin, async (req, res) => {
         res.json({ videos, cdnHostname, total: videos.length });
     } catch (err) {
         res.status(502).json({ error: 'Error conectando Bunny API: ' + err.message });
+    }
+});
+
+/** GET /api/bunny/libraries — Lista todas las bibliotecas de video de la cuenta Bunny */
+app.get('/api/bunny/libraries', requireAdmin, async (req, res) => {
+    const accountKey = (req.query.accountKey || '').trim();
+    if (!accountKey) return res.status(400).json({ error: 'accountKey requerida' });
+    try {
+        const data = await bunnyApiRequest('/videolibrary?page=1&perPage=1000&includeAccessKey=true', {
+            hostname: 'api.bunny.net',
+            extraHeaders: { AccessKey: accountKey },
+        });
+        const items = data.Items || data.items || [];
+        const libraries = items.map(l => ({ id: l.Id || l.id, name: l.Name || l.name, apiKey: l.ApiKey || l.apiKey || '' }));
+        res.json({ libraries });
+    } catch (err) {
+        res.status(502).json({ error: 'Error listando bibliotecas Bunny: ' + err.message });
     }
 });
 
@@ -1179,14 +1196,14 @@ app.post('/api/bunny/import', requireAdmin, async (req, res) => {
     }
 });
 
-/** Helper: llama a la API de Bunny Stream (video.bunnycdn.com) */
-function bunnyApiRequest(path) {
+/** Helper: llama a la API de Bunny (Stream o Account) */
+function bunnyApiRequest(path, { hostname = 'video.bunnycdn.com', extraHeaders = {} } = {}) {
     return new Promise((resolve, reject) => {
         const opts = {
-            hostname: 'video.bunnycdn.com',
+            hostname,
             path,
             method: 'GET',
-            headers: { Accept: 'application/json' },
+            headers: { Accept: 'application/json', ...extraHeaders },
         };
         const req = https.request(opts, (res) => {
             let raw = '';

@@ -309,6 +309,11 @@
         .bunny-summary { background: var(--c-surface2); border-radius: 8px; padding: 14px; margin-top: 10px; font-size: 0.85rem; }
         .bunny-summary .s-ok { color: var(--c-success); }
         .bunny-summary .s-warn { color: var(--c-warn); }
+        .lib-option { padding: 10px 14px; border: 1px solid var(--c-border); border-radius: 6px; cursor: pointer; margin-bottom: 6px; transition: background 0.15s; display: flex; align-items: center; gap: 10px; }
+        .lib-option:hover { background: rgba(255,255,255,0.05); }
+        .lib-option.selected { border-color: var(--c-primary); background: rgba(229,62,62,0.1); }
+        .lib-option .lib-name { font-weight: 600; font-size: 0.9rem; }
+        .lib-option .lib-id { color: var(--c-muted); font-size: 0.75rem; font-family: monospace; margin-left: auto; }
 
         @media (max-width: 640px) {
             aside { display: none; }
@@ -543,22 +548,22 @@
                     </div>
                 </div>
 
-                <!-- PASO 2: API Key y Library Bunny -->
+                <!-- PASO 2: Selector de biblioteca Bunny -->
                 <div class="step-panel" id="bstep-2">
-                    <h4 style="margin-bottom:8px">Paso 2 — Conectar biblioteca de Bunny.net</h4>
-                    <p style="color:var(--c-muted);font-size:0.82rem;margin-bottom:14px">Ingresa las credenciales de tu biblioteca Bunny Stream. Las credenciales se guardan de forma segura en el servidor.</p>
-                    <div class="form-row">
-                        <label>API Key de la biblioteca (AccessKey)</label>
-                        <input type="password" id="bi-apikey" maxlength="80" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+                    <h4 style="margin-bottom:8px">Paso 2 &mdash; Seleccionar biblioteca de Bunny.net</h4>
+                    <p style="color:var(--c-muted);font-size:0.82rem;margin-bottom:14px">Ingresa tu API Key principal de cuenta Bunny.net para ver y seleccionar tu biblioteca.</p>
+                    <div class="form-row" style="margin-bottom:10px">
+                        <label>API Key de cuenta Bunny.net</label>
+                        <div style="display:flex;gap:8px">
+                            <input type="password" id="bi-account-key" maxlength="80" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" style="flex:1">
+                            <button class="btn btn-ghost" onclick="loadBunnyLibraries()" id="btn-load-libs" style="white-space:nowrap">Cargar bibliotecas</button>
+                        </div>
                     </div>
-                    <div class="form-row">
-                        <label>Library ID (n&#250;mero)</label>
-                        <input type="text" id="bi-libid" maxlength="20" placeholder="123456">
-                    </div>
+                    <div id="bi-libs-list" style="display:none;max-height:240px;overflow-y:auto;margin-bottom:10px"></div>
                     <div id="bi-connect-msg" style="font-size:0.82rem;margin:8px 0;min-height:18px"></div>
                     <div style="display:flex;gap:8px">
                         <button class="btn btn-ghost" onclick="goToStep(1)">&#8592; Atr&#225;s</button>
-                        <button class="btn btn-red" onclick="connectBunny()" id="btn-connect-bunny" style="flex:1">Conectar y cargar videos</button>
+                        <button class="btn btn-red" onclick="connectBunny()" id="btn-connect-bunny" style="flex:1" disabled>Conectar y cargar videos</button>
                     </div>
                 </div>
 
@@ -1406,6 +1411,7 @@ let bunnyFolderStructure = null; // árbol de carpetas leído
 let bunnyVideosFromApi = [];     // videos traídos de la API de Bunny
 let bunnyMatchedStructure = null; // estructura final con matches
 let currentBunnyStep = 1;
+let selectedLibrary = null;      // biblioteca seleccionada { id, name, apiKey }
 
 function openBunnyImportModal() {
     resetBunnyImport();
@@ -1418,11 +1424,15 @@ function resetBunnyImport() {
     bunnyFolderStructure = null;
     bunnyVideosFromApi = [];
     bunnyMatchedStructure = null;
+    selectedLibrary = null;
     goToStep(1);
     $('folder-tree-preview').style.display = 'none';
     $('step1-next').style.display = 'none';
     $('bi-connect-msg').textContent = '';
     $('bi-import-msg').textContent = '';
+    if ($('bi-account-key')) $('bi-account-key').value = '';
+    if ($('bi-libs-list')) { $('bi-libs-list').style.display = 'none'; $('bi-libs-list').innerHTML = ''; }
+    const _bc = $('btn-connect-bunny'); if (_bc) _bc.disabled = true;
 }
 
 function goToStep(n) {
@@ -1499,23 +1509,60 @@ function renderFolderTree() {
     $('step1-next').style.display = '';
 }
 
-// PASO 2: Conectar Bunny API
-async function connectBunny() {
-    const apiKey = ($('bi-apikey').value || '').trim();
-    const libraryId = ($('bi-libid').value || '').trim();
+// PASO 2: Cargar bibliotecas y conectar Bunny API
+async function loadBunnyLibraries() {
+    const accountKey = ($('bi-account-key').value || '').trim();
     const msg = $('bi-connect-msg');
-    if (!apiKey || !libraryId) { msg.textContent = 'API Key y Library ID son requeridos.'; msg.style.color = 'var(--c-error)'; return; }
-    msg.textContent = 'Conectando con Bunny...'; msg.style.color = 'var(--c-muted)';
+    const btnLoad = $('btn-load-libs');
+    if (!accountKey) { msg.textContent = 'Ingresa tu API Key de cuenta Bunny.'; msg.style.color = 'var(--c-error)'; return; }
+    msg.textContent = 'Cargando bibliotecas...'; msg.style.color = 'var(--c-muted)';
+    if (btnLoad) btnLoad.disabled = true;
+    try {
+        const data = await api('GET', '/api/bunny/libraries?accountKey=' + encodeURIComponent(accountKey));
+        const libs = data.libraries || [];
+        if (!libs.length) { msg.textContent = 'No se encontraron bibliotecas.'; msg.style.color = 'var(--c-warn)'; return; }
+        selectedLibrary = null;
+        $('btn-connect-bunny').disabled = true;
+        const listEl = $('bi-libs-list');
+        listEl.style.display = '';
+        listEl.innerHTML = libs.map(l =>
+            `<div class="lib-option" onclick="selectLibrary('${l.id}',${JSON.stringify(l.name)},${JSON.stringify(l.apiKey)})" id="lib-${l.id}">
+                <span>&#128193;</span>
+                <span class="lib-name">${esc(l.name)}</span>
+                <span class="lib-id">ID: ${l.id}</span>
+            </div>`
+        ).join('');
+        msg.textContent = libs.length + ' biblioteca(s) encontrada(s). Selecciona una.';
+        msg.style.color = 'var(--c-success)';
+    } catch (err) {
+        msg.textContent = 'Error: ' + err.message; msg.style.color = 'var(--c-error)';
+    } finally {
+        if (btnLoad) btnLoad.disabled = false;
+    }
+}
+
+function selectLibrary(id, name, apiKey) {
+    selectedLibrary = { id, name, apiKey };
+    document.querySelectorAll('.lib-option').forEach(el => el.classList.remove('selected'));
+    const el = $('lib-' + id);
+    if (el) el.classList.add('selected');
+    $('btn-connect-bunny').disabled = false;
+    $('bi-connect-msg').textContent = '\u2713 Seleccionada: ' + name;
+    $('bi-connect-msg').style.color = 'var(--c-success)';
+}
+
+async function connectBunny() {
+    const msg = $('bi-connect-msg');
+    if (!selectedLibrary) { msg.textContent = 'Selecciona una biblioteca primero.'; msg.style.color = 'var(--c-error)'; return; }
+    const { id: libraryId, apiKey } = selectedLibrary;
+    msg.textContent = 'Cargando videos de la biblioteca...'; msg.style.color = 'var(--c-muted)';
     $('btn-connect-bunny').disabled = true;
     try {
-        // Guardar config en servidor
-        await api('POST', '/api/bunny/config', { apiKey, libraryId });
-        msg.textContent = 'Conectado. Cargando videos...';
-        const data = await api('GET', `/api/bunny/videos?apiKey=${encodeURIComponent(apiKey)}&libraryId=${encodeURIComponent(libraryId)}`);
+        await api('POST', '/api/bunny/config', { apiKey, libraryId: String(libraryId) });
+        const data = await api('GET', `/api/bunny/videos?apiKey=${encodeURIComponent(apiKey)}&libraryId=${encodeURIComponent(String(libraryId))}`);
         bunnyVideosFromApi = data.videos || [];
-        msg.textContent = `✓ ${bunnyVideosFromApi.length} videos encontrados en Bunny.`;
+        msg.textContent = `\u2713 ${bunnyVideosFromApi.length} videos encontrados en Bunny.`;
         msg.style.color = 'var(--c-success)';
-        // Ir automáticamente al paso 3 (matching)
         setTimeout(() => { goToStep(3); doMatching(); }, 600);
     } catch (err) {
         msg.textContent = 'Error: ' + err.message; msg.style.color = 'var(--c-error)';
