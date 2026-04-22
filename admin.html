@@ -253,6 +253,63 @@
         .device-bound   { color: var(--c-warn);    font-size: 0.72rem; }
         .device-unbound { color: var(--c-success); font-size: 0.72rem; }
 
+        /* ---- Modules panel ---- */
+        .modules-panel { margin-bottom: 16px; }
+        .module-tree { list-style: none; }
+        .module-tree li { padding: 6px 0; }
+        .module-item {
+            display: flex; align-items: center; gap: 8px;
+            padding: 8px 12px; background: var(--c-surface2);
+            border: 1px solid var(--c-border); border-radius: 6px;
+            margin-bottom: 4px;
+        }
+        .module-item .mod-name { flex: 1; font-size: 0.88rem; }
+        .module-item .mod-actions button {
+            background: none; border: 1px solid var(--c-border); color: var(--c-muted);
+            border-radius: 4px; padding: 2px 7px; font-size: 0.7rem; cursor: pointer; margin-left: 3px;
+        }
+        .module-item .mod-actions button:hover { color: var(--c-primary); border-color: var(--c-primary); }
+        .module-item .mod-actions .btn-mod-del:hover { color: var(--c-error); border-color: var(--c-error); }
+        .submodule-list { margin-left: 22px; border-left: 2px solid var(--c-border); padding-left: 12px; margin-top: 4px; }
+        .module-badge { font-size: 0.68rem; padding: 1px 6px; border-radius: 3px; background: rgba(100,100,255,0.15); color: #aab; margin-right: 4px; }
+
+        /* ---- Bunny import modal ---- */
+        #bunny-import-modal-bg {
+            position: fixed; inset: 0; z-index: 300;
+            background: rgba(0,0,0,0.75); display: none;
+            align-items: flex-start; justify-content: center; padding: 24px 16px; overflow-y: auto;
+        }
+        #bunny-import-modal-bg.active { display: flex; }
+        #bunny-import-modal {
+            background: var(--c-surface); border: 1px solid var(--c-border);
+            border-radius: 14px; padding: 28px; width: 100%; max-width: 680px;
+            position: relative; margin: auto;
+        }
+        #bunny-import-modal h3 { margin-bottom: 6px; font-size: 1.1rem; }
+        .step-indicator {
+            display: flex; gap: 6px; margin-bottom: 20px;
+        }
+        .step-dot {
+            width: 28px; height: 28px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 0.75rem; font-weight: 700;
+            background: var(--c-surface2); border: 2px solid var(--c-border); color: var(--c-muted);
+        }
+        .step-dot.active { background: var(--c-primary); border-color: var(--c-primary); color: #fff; }
+        .step-dot.done { background: var(--c-success); border-color: var(--c-success); color: #fff; }
+        .step-line { flex: 1; height: 2px; background: var(--c-border); margin-top: 13px; border-radius: 1px; }
+        .step-line.done { background: var(--c-success); }
+        .step-panel { display: none; }
+        .step-panel.active { display: block; }
+        .tree-preview { max-height: 260px; overflow-y: auto; background: var(--c-surface2); border: 1px solid var(--c-border); border-radius: 8px; padding: 12px; font-size: 0.8rem; line-height: 1.7; margin-top: 10px; }
+        .tree-folder { color: var(--c-warn); }
+        .tree-file { color: var(--c-muted); margin-left: 18px; }
+        .tree-file.matched { color: var(--c-success); }
+        .tree-file.unmatched { color: var(--c-error); }
+        .bunny-summary { background: var(--c-surface2); border-radius: 8px; padding: 14px; margin-top: 10px; font-size: 0.85rem; }
+        .bunny-summary .s-ok { color: var(--c-success); }
+        .bunny-summary .s-warn { color: var(--c-warn); }
+
         @media (max-width: 640px) {
             aside { display: none; }
             main { padding: 16px; }
@@ -358,6 +415,7 @@
             <div style="display:flex;justify-content:flex-end;gap:10px;margin-bottom:10px">
                 <button class="btn-gear" onclick="openCreateCourseModal()">&#128218; Crear curso</button>
                 <button class="btn-gear" onclick="openDomainsModal()">&#9881; Dominios permitidos</button>
+                <button class="btn-gear" onclick="openBunnyImportModal()" style="color:#f97316;border-color:#f97316">&#128194; Importar desde Bunny</button>
             </div>
 
             <!-- Vista de cursos (por defecto) -->
@@ -371,10 +429,11 @@
             <div id="course-detail-view" style="display:none">
                 <div class="course-header">
                     <button class="back-btn" onclick="showCoursesView()">&#8592; Volver a cursos</button>
-                    <div>
+                    <div style="flex:1">
                         <h3 id="course-detail-name" style="margin:0"></h3>
                         <span id="course-detail-author" style="color:var(--c-muted);font-size:0.8rem"></span>
                     </div>
+                    <button class="btn-gear" id="btn-manage-modules" onclick="openModulesModal()" style="font-size:0.82rem">&#128193; Gestionar m&#243;dulos</button>
                 </div>
                 <!-- Agregar video de Bunny.net (dentro del curso) -->
                 <div class="card" style="margin-bottom:16px">
@@ -400,8 +459,8 @@
                 <div class="card">
                     <div class="table-wrap">
                         <table>
-                            <thead><tr><th style="width:30px"><input type="checkbox" class="bulk-check" id="bulk-select-all" onchange="toggleSelectAll(this)"></th><th style="width:30px"></th><th>Titulo</th><th>ID</th><th>Fuente</th><th>Estado</th><th>Fecha</th><th>Acciones</th></tr></thead>
-                            <tbody id="catalog-body"><tr><td colspan="8" style="color:var(--c-muted)">Cargando...</td></tr></tbody>
+                            <thead><tr><th style="width:30px"><input type="checkbox" class="bulk-check" id="bulk-select-all" onchange="toggleSelectAll(this)"></th><th style="width:30px"></th><th>Titulo</th><th>M&#243;dulo</th><th>ID</th><th>Fuente</th><th>Estado</th><th>Fecha</th><th>Acciones</th></tr></thead>
+                            <tbody id="catalog-body"><tr><td colspan="9" style="color:var(--c-muted)">Cargando...</td></tr></tbody>
                         </table>
                     </div>
                     <button class="btn btn-ghost" onclick="loadCourseVideos(currentCourseId)" style="margin-top:14px;font-size:0.8rem">Actualizar</button>
@@ -422,6 +481,128 @@
             </div>
         </div>
 
+        <!-- Modal: Gestionar módulos -->
+        <div id="modules-modal-bg" class="move-modal-bg" style="z-index:250">
+            <div class="move-modal" style="max-width:560px;max-height:90vh;overflow-y:auto">
+                <h3 style="margin-bottom:14px">&#128193; Gestionar M&#243;dulos</h3>
+                <p style="color:var(--c-muted);font-size:0.8rem;margin-bottom:14px">Crea, edita y elimina m&#243;dulos y subm&#243;dulos para organizar los videos del curso.</p>
+
+                <!-- Crear módulo -->
+                <div style="display:flex;gap:8px;margin-bottom:14px;align-items:flex-end">
+                    <div class="form-row" style="margin:0;flex:1">
+                        <label>Nombre del m&#243;dulo</label>
+                        <input type="text" id="new-module-name" maxlength="120" placeholder="Ej: Módulo 1 — Introducción">
+                    </div>
+                    <div class="form-row" style="margin:0;min-width:160px">
+                        <label>M&#243;dulo padre (opcional)</label>
+                        <select id="new-module-parent" style="width:100%;padding:9px 10px;background:var(--c-surface2);border:1px solid var(--c-border);border-radius:6px;color:var(--c-text);font-size:0.85rem">
+                            <option value="">— Sin padre (nivel superior)</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-red" onclick="createModuleFromModal()" style="height:38px;white-space:nowrap">+ Agregar</button>
+                </div>
+
+                <!-- Lista de módulos -->
+                <div id="modules-tree-container" style="margin-bottom:14px">
+                    <p style="color:var(--c-muted);font-size:0.82rem">Cargando...</p>
+                </div>
+
+                <button class="btn btn-ghost" onclick="closeModulesModal()" style="width:100%">Cerrar</button>
+            </div>
+        </div>
+
+        <!-- Modal: Importar desde Bunny -->
+        <div id="bunny-import-modal-bg">
+            <div id="bunny-import-modal">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                    <h3>&#128194; Importar Curso desde Bunny.net</h3>
+                    <button onclick="closeBunnyImportModal()" style="background:none;border:none;color:var(--c-muted);font-size:1.3rem;cursor:pointer">&times;</button>
+                </div>
+
+                <!-- Step indicator -->
+                <div class="step-indicator">
+                    <div class="step-dot active" id="sdot-1">1</div>
+                    <div class="step-line" id="sline-1"></div>
+                    <div class="step-dot" id="sdot-2">2</div>
+                    <div class="step-line" id="sline-2"></div>
+                    <div class="step-dot" id="sdot-3">3</div>
+                    <div class="step-line" id="sline-3"></div>
+                    <div class="step-dot" id="sdot-4">4</div>
+                    <div class="step-line" id="sline-4"></div>
+                    <div class="step-dot" id="sdot-5">5</div>
+                </div>
+
+                <!-- PASO 1: Seleccionar carpeta -->
+                <div class="step-panel active" id="bstep-1">
+                    <h4 style="margin-bottom:8px">Paso 1 — Seleccionar estructura de carpetas</h4>
+                    <p style="color:var(--c-muted);font-size:0.82rem;margin-bottom:14px">Selecciona la carpeta local con tus videos. Solo se leen los nombres (no se sube ning&#250;n archivo). La estructura de carpetas define los m&#243;dulos.</p>
+                    <button class="btn btn-ghost" id="btn-pick-folder" onclick="pickFolder()" style="width:100%;padding:18px;font-size:0.95rem;border-style:dashed">&#128193; Seleccionar carpeta de mi PC</button>
+                    <div id="folder-tree-preview" class="tree-preview" style="display:none;margin-top:12px"></div>
+                    <div style="margin-top:14px;display:none" id="step1-next">
+                        <button class="btn btn-red" onclick="goToStep(2)" style="width:100%">Continuar &#8594;</button>
+                    </div>
+                </div>
+
+                <!-- PASO 2: API Key y Library Bunny -->
+                <div class="step-panel" id="bstep-2">
+                    <h4 style="margin-bottom:8px">Paso 2 — Conectar biblioteca de Bunny.net</h4>
+                    <p style="color:var(--c-muted);font-size:0.82rem;margin-bottom:14px">Ingresa las credenciales de tu biblioteca Bunny Stream. Las credenciales se guardan de forma segura en el servidor.</p>
+                    <div class="form-row">
+                        <label>API Key de la biblioteca (AccessKey)</label>
+                        <input type="password" id="bi-apikey" maxlength="80" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+                    </div>
+                    <div class="form-row">
+                        <label>Library ID (n&#250;mero)</label>
+                        <input type="text" id="bi-libid" maxlength="20" placeholder="123456">
+                    </div>
+                    <div id="bi-connect-msg" style="font-size:0.82rem;margin:8px 0;min-height:18px"></div>
+                    <div style="display:flex;gap:8px">
+                        <button class="btn btn-ghost" onclick="goToStep(1)">&#8592; Atr&#225;s</button>
+                        <button class="btn btn-red" onclick="connectBunny()" id="btn-connect-bunny" style="flex:1">Conectar y cargar videos</button>
+                    </div>
+                </div>
+
+                <!-- PASO 3: Matching automático -->
+                <div class="step-panel" id="bstep-3">
+                    <h4 style="margin-bottom:8px">Paso 3 — Comparando con Bunny.net...</h4>
+                    <p style="color:var(--c-muted);font-size:0.82rem;margin-bottom:14px">El sistema est&#225; comparando los nombres de tus archivos con los videos en Bunny.</p>
+                    <div style="text-align:center;padding:30px">
+                        <div style="font-size:2rem;margin-bottom:10px">&#9881;</div>
+                        <div id="matching-status" style="color:var(--c-muted);font-size:0.85rem">Procesando...</div>
+                    </div>
+                </div>
+
+                <!-- PASO 4: Preview -->
+                <div class="step-panel" id="bstep-4">
+                    <h4 style="margin-bottom:8px">Paso 4 — Revisa el resultado</h4>
+                    <div class="bunny-summary" id="match-summary"></div>
+                    <div class="tree-preview" id="match-tree-preview" style="margin-top:10px"></div>
+                    <div style="display:flex;gap:8px;margin-top:14px">
+                        <button class="btn btn-ghost" onclick="goToStep(2)">&#8592; Volver</button>
+                        <button class="btn btn-red" onclick="goToStep(5)" style="flex:1">Confirmar y continuar &#8594;</button>
+                    </div>
+                </div>
+
+                <!-- PASO 5: Nombre del curso y confirmar -->
+                <div class="step-panel" id="bstep-5">
+                    <h4 style="margin-bottom:8px">Paso 5 — Confirmar e importar</h4>
+                    <div class="form-row">
+                        <label>Nombre del curso *</label>
+                        <input type="text" id="bi-course-name" maxlength="120" placeholder="Ej: Order Book Trading — Ferran Font">
+                    </div>
+                    <div class="form-row">
+                        <label>Autor</label>
+                        <input type="text" id="bi-course-author" maxlength="100" placeholder="Ej: Ferran Font">
+                    </div>
+                    <div id="bi-import-msg" style="font-size:0.82rem;margin:8px 0;min-height:18px"></div>
+                    <div style="display:flex;gap:8px">
+                        <button class="btn btn-ghost" onclick="goToStep(4)">&#8592; Atr&#225;s</button>
+                        <button class="btn btn-red" onclick="executeImport()" id="btn-execute-import" style="flex:1">&#9989; Crear curso con esta estructura</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Modal: Mover video a curso -->
         <!-- Bulk move bar -->
     <div id="bulk-bar" class="bulk-bar">
@@ -431,9 +612,18 @@
     </div>
 
     <div id="move-video-modal-bg" class="move-modal-bg">
-            <div class="move-modal">
-                <h3>Mover video a curso</h3>
+            <div class="move-modal" style="max-width:460px">
+                <h3>Mover video a...</h3>
                 <p style="color:var(--c-muted);font-size:0.8rem;margin-bottom:12px" id="move-video-title"></p>
+
+                <!-- Sección módulos (dentro del curso actual) -->
+                <div id="move-modules-section" style="display:none">
+                    <p style="font-size:0.75rem;color:var(--c-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">M&#243;dulos de este curso</p>
+                    <div id="move-modules-list"></div>
+                    <hr style="border-color:var(--c-border);margin:10px 0">
+                </div>
+
+                <p style="font-size:0.75rem;color:var(--c-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Otros cursos</p>
                 <div id="move-course-list"></div>
                 <button class="btn btn-ghost" onclick="closeMoveModal()" style="margin-top:10px;width:100%">Cancelar</button>
             </div>
@@ -785,6 +975,7 @@ $('btn-upload').addEventListener('click', async () => {
 let currentCourseId = null;
 let editingCourseId = null;
 let allCoursesCache = [];
+let allModulesCache = []; // módulos del curso actual
 let moveVideoId = null;
 let dragSrcRow = null;
 let bulkSelectedIds = new Set();
@@ -845,16 +1036,24 @@ async function openCourse(courseId) {
 
 async function loadCourseVideos(courseId) {
     const tbody = $('catalog-body');
-    tbody.innerHTML = '<tr><td colspan="8" style="color:var(--c-muted)">Cargando...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" style="color:var(--c-muted)">Cargando...</td></tr>';
     clearBulkSelection();
     try {
+        // Cargar módulos del curso para el badge de módulo en cada video
+        if (courseId && courseId !== '__unassigned__') {
+            const modData = await api('GET', `/api/courses/${courseId}/modules`);
+            allModulesCache = modData.modules || [];
+        } else {
+            allModulesCache = [];
+        }
+
         const url = courseId === '__unassigned__'
             ? '/api/courses/unassigned/videos'
             : `/api/courses/${courseId}/videos`;
         const data = await api('GET', url);
         const videos = data.videos || [];
         if (!videos.length) {
-            tbody.innerHTML = '<tr><td colspan="8" style="color:var(--c-muted)">No hay videos en este curso.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="9" style="color:var(--c-muted)">No hay videos en este curso.</td></tr>';
             return;
         }
         const base = window.location.origin;
@@ -868,11 +1067,17 @@ async function loadCourseVideos(courseId) {
             const link = v.status === 'ready'
                 ? `<span class="copy-link" onclick="copyText('${esc(base + '/?v=' + v.videoId)}')" style="cursor:pointer">Copiar enlace</span>`
                 : '';
+            // Módulo asignado
+            const mod = v.moduleId ? allModulesCache.find(m => m.id === v.moduleId) : null;
+            const modCell = mod
+                ? `<span class="module-badge">${esc(mod.name)}</span>`
+                : `<span style="color:var(--c-muted);font-size:0.75rem">—</span>`;
             return `<tr draggable="true" data-videoid="${esc(v.videoId)}" data-idx="${i}"
                 ondragstart="dragStart(event)" ondragover="dragOver(event)" ondrop="dropRow(event)" ondragend="dragEnd(event)">
                 <td><input type="checkbox" class="bulk-check row-check" data-vid="${esc(v.videoId)}" onchange="toggleRowCheck(this)"></td>
                 <td><span class="sort-handle">&#9776;</span></td>
                 <td>${esc(v.title || v.videoId)}</td>
+                <td>${modCell}</td>
                 <td style="font-family:monospace;font-size:0.75rem">${esc(v.videoId.slice(0,8)+'...')}</td>
                 <td>${srcBadge}</td>
                 <td>${badge}</td>
@@ -884,7 +1089,7 @@ async function loadCourseVideos(courseId) {
                 </td>
             </tr>`;
         }).join('');
-    } catch (err) { tbody.innerHTML = `<tr><td colspan="7" style="color:var(--c-error)">${esc(err.message)}</td></tr>`; }
+    } catch (err) { tbody.innerHTML = `<tr><td colspan="9" style="color:var(--c-error)">${esc(err.message)}</td></tr>`; }
 }
 
 // Drag & drop reorder
@@ -955,6 +1160,32 @@ async function deleteCourse(id, name) {
 function openMoveModal(videoId, title) {
     moveVideoId = videoId;
     $('move-video-title').textContent = title;
+
+    // Mostrar módulos del curso actual si hay
+    const modsSection = $('move-modules-section');
+    const modsList = $('move-modules-list');
+    if (currentCourseId && currentCourseId !== '__unassigned__' && allModulesCache.length) {
+        modsSection.style.display = '';
+        // Construir árbol de módulos (niveles)
+        let html = '';
+        const topLevel = allModulesCache.filter(m => !m.parentId);
+        for (const m of topLevel) {
+            html += `<button class="course-option" onclick="moveVideoToModule('${esc(videoId)}','${esc(m.id)}')" style="margin-bottom:3px">&#128193; ${esc(m.name)}</button>`;
+            const subs = allModulesCache.filter(x => x.parentId === m.id);
+            for (const s of subs) {
+                html += `<button class="course-option" onclick="moveVideoToModule('${esc(videoId)}','${esc(s.id)}')" style="margin-left:16px;margin-bottom:3px;font-size:0.8rem">&#x21B3; ${esc(s.name)}</button>`;
+                const subsubs = allModulesCache.filter(x => x.parentId === s.id);
+                for (const ss of subsubs) {
+                    html += `<button class="course-option" onclick="moveVideoToModule('${esc(videoId)}','${esc(ss.id)}')" style="margin-left:32px;margin-bottom:3px;font-size:0.75rem">&#x21B3; ${esc(ss.name)}</button>`;
+                }
+            }
+        }
+        html += `<button class="course-option" onclick="moveVideoToModule('${esc(videoId)}',null)" style="color:var(--c-muted);margin-bottom:3px">&#128193; Sin m&#243;dulo (nivel curso)</button>`;
+        modsList.innerHTML = html;
+    } else {
+        modsSection.style.display = 'none';
+    }
+
     let html = '';
     for (const c of allCoursesCache) {
         if (c.id === currentCourseId) continue;
@@ -963,7 +1194,7 @@ function openMoveModal(videoId, title) {
     if (currentCourseId !== '__unassigned__') {
         html += `<button class="course-option" onclick="moveVideo(null)" style="color:var(--c-muted)">Sin asignar</button>`;
     }
-    if (!html) html = '<p style="color:var(--c-muted)">No hay otros cursos. Crea uno primero.</p>';
+    if (!html) html = '<p style="color:var(--c-muted)">No hay otros cursos.</p>';
     $('move-course-list').innerHTML = html;
     $('move-video-modal-bg').classList.add('active');
 }
@@ -973,6 +1204,14 @@ async function moveVideo(courseId) {
     if (!moveVideoId) return;
     try {
         await api('POST', '/api/courses/move-video', { videoId: moveVideoId, courseId });
+        closeMoveModal();
+        loadCourseVideos(currentCourseId);
+    } catch (err) { alert('Error: ' + err.message); }
+}
+
+async function moveVideoToModule(videoId, moduleId) {
+    try {
+        await api('POST', '/api/courses/set-module', { videoId, moduleId });
         closeMoveModal();
         loadCourseVideos(currentCourseId);
     } catch (err) { alert('Error: ' + err.message); }
@@ -1007,6 +1246,8 @@ function openBulkMoveModal() {
     if (!bulkSelectedIds.size) return;
     isBulkMove = true;
     $('move-video-title').textContent = bulkSelectedIds.size + ' video' + (bulkSelectedIds.size > 1 ? 's' : '') + ' seleccionado' + (bulkSelectedIds.size > 1 ? 's' : '');
+    // Módulos (solo destinos de curso)
+    $('move-modules-section').style.display = 'none';
     let html = '';
     for (const c of allCoursesCache) {
         if (c.id === currentCourseId) continue;
@@ -1068,6 +1309,355 @@ async function deleteVideo(videoId) {
 
 // Cargar catalogo legacy (para compatibilidad con el nav)
 function loadCatalog() { showCoursesView(); }
+
+// ================================================================
+//  MÓDULOS
+// ================================================================
+
+async function openModulesModal() {
+    if (!currentCourseId || currentCourseId === '__unassigned__') return;
+    $('modules-modal-bg').classList.add('active');
+    await refreshModulesModal();
+}
+
+function closeModulesModal() { $('modules-modal-bg').classList.remove('active'); }
+
+async function refreshModulesModal() {
+    try {
+        const data = await api('GET', `/api/courses/${currentCourseId}/modules`);
+        allModulesCache = data.modules || [];
+        renderModulesTree();
+        // Actualizar select de padre
+        const sel = $('new-module-parent');
+        sel.innerHTML = '<option value="">— Sin padre (nivel superior)</option>';
+        for (const m of allModulesCache.filter(m => !m.parentId)) {
+            sel.innerHTML += `<option value="${esc(m.id)}">${esc(m.name)}</option>`;
+            // Agregar hijos como opción de padre también
+            for (const s of allModulesCache.filter(x => x.parentId === m.id)) {
+                sel.innerHTML += `<option value="${esc(s.id)}">&nbsp;&nbsp;&#x21B3; ${esc(s.name)}</option>`;
+            }
+        }
+    } catch (err) { $('modules-tree-container').innerHTML = `<p style="color:var(--c-error)">${esc(err.message)}</p>`; }
+}
+
+function renderModulesTree() {
+    const container = $('modules-tree-container');
+    if (!allModulesCache.length) {
+        container.innerHTML = '<p style="color:var(--c-muted);font-size:0.82rem">No hay módulos creados aún.</p>';
+        return;
+    }
+    function renderLevel(parentId, indent) {
+        const items = allModulesCache.filter(m => (m.parentId || null) === parentId);
+        if (!items.length) return '';
+        let html = `<div style="margin-left:${indent}px">`;
+        for (const m of items) {
+            html += `<div class="module-item">
+                <span style="color:var(--c-warn);margin-right:4px">&#128193;</span>
+                <span class="mod-name">${esc(m.name)}</span>
+                <span class="mod-actions">
+                    <button onclick="renameModule('${esc(m.id)}','${esc(m.name)}')">Renombrar</button>
+                    <button class="btn-mod-del" onclick="deleteModuleConfirm('${esc(m.id)}','${esc(m.name)}')">Eliminar</button>
+                </span>
+            </div>`;
+            html += renderLevel(m.id, 0);
+        }
+        html += '</div>';
+        return html;
+    }
+    container.innerHTML = renderLevel(null, 0);
+}
+
+async function createModuleFromModal() {
+    const name = ($('new-module-name').value || '').trim();
+    const parentId = $('new-module-parent').value || null;
+    if (!name) { alert('El nombre es requerido'); return; }
+    try {
+        await api('POST', `/api/courses/${currentCourseId}/modules`, { name, parentId });
+        $('new-module-name').value = '';
+        await refreshModulesModal();
+        loadCourseVideos(currentCourseId);
+    } catch (err) { alert('Error: ' + err.message); }
+}
+
+async function renameModule(id, currentName) {
+    const newName = prompt('Nuevo nombre para el módulo:', currentName);
+    if (!newName || !newName.trim()) return;
+    try {
+        await api('PUT', `/api/modules/${id}`, { name: newName.trim() });
+        await refreshModulesModal();
+        loadCourseVideos(currentCourseId);
+    } catch (err) { alert('Error: ' + err.message); }
+}
+
+async function deleteModuleConfirm(id, name) {
+    if (!confirm(`Eliminar módulo "${name}"? Los videos quedarán sin módulo asignado.`)) return;
+    try {
+        await api('DELETE', `/api/modules/${id}`);
+        await refreshModulesModal();
+        loadCourseVideos(currentCourseId);
+    } catch (err) { alert('Error: ' + err.message); }
+}
+
+// ================================================================
+//  BUNNY IMPORT
+// ================================================================
+
+let bunnyFolderStructure = null; // árbol de carpetas leído
+let bunnyVideosFromApi = [];     // videos traídos de la API de Bunny
+let bunnyMatchedStructure = null; // estructura final con matches
+let currentBunnyStep = 1;
+
+function openBunnyImportModal() {
+    resetBunnyImport();
+    $('bunny-import-modal-bg').classList.add('active');
+}
+function closeBunnyImportModal() {
+    $('bunny-import-modal-bg').classList.remove('active');
+}
+function resetBunnyImport() {
+    bunnyFolderStructure = null;
+    bunnyVideosFromApi = [];
+    bunnyMatchedStructure = null;
+    goToStep(1);
+    $('folder-tree-preview').style.display = 'none';
+    $('step1-next').style.display = 'none';
+    $('bi-connect-msg').textContent = '';
+    $('bi-import-msg').textContent = '';
+}
+
+function goToStep(n) {
+    currentBunnyStep = n;
+    for (let i = 1; i <= 5; i++) {
+        const panel = $('bstep-' + i);
+        const dot = $('sdot-' + i);
+        if (panel) panel.classList.toggle('active', i === n);
+        if (dot) {
+            dot.classList.toggle('active', i === n);
+            dot.classList.toggle('done', i < n);
+        }
+        if (i < 5) {
+            const line = $('sline-' + i);
+            if (line) line.classList.toggle('done', i < n);
+        }
+    }
+}
+
+// PASO 1: Leer carpeta local
+async function pickFolder() {
+    if (!window.showDirectoryPicker) {
+        alert('Tu navegador no soporta File System Access API. Usa Chrome o Edge.');
+        return;
+    }
+    try {
+        const dirHandle = await window.showDirectoryPicker({ mode: 'read' });
+        bunnyFolderStructure = await readDirectoryStructure(dirHandle, 0);
+        renderFolderTree();
+    } catch (err) {
+        if (err.name !== 'AbortError') alert('Error leyendo carpeta: ' + err.message);
+    }
+}
+
+async function readDirectoryStructure(dirHandle, depth) {
+    const result = { name: dirHandle.name, type: 'folder', children: [], depth };
+    const entries = [];
+    for await (const entry of dirHandle.values()) {
+        entries.push(entry);
+    }
+    // Ordenar: carpetas primero, luego archivos, ambos alfabéticamente
+    entries.sort((a, b) => {
+        if (a.kind !== b.kind) return a.kind === 'directory' ? -1 : 1;
+        return a.name.localeCompare(b.name, undefined, { numeric: true });
+    });
+    for (const entry of entries) {
+        if (entry.kind === 'directory') {
+            const sub = await readDirectoryStructure(entry, depth + 1);
+            result.children.push(sub);
+        } else {
+            // Solo archivos de video
+            const ext = entry.name.split('.').pop().toLowerCase();
+            if (['mp4','mov','mkv','avi','webm','m4v'].includes(ext)) {
+                result.children.push({ name: entry.name, type: 'file', depth: depth + 1 });
+            }
+        }
+    }
+    return result;
+}
+
+function renderFolderTree() {
+    const preview = $('folder-tree-preview');
+    preview.style.display = '';
+    function renderNode(node, indent) {
+        if (node.type === 'folder') {
+            let html = `<div style="margin-left:${indent*14}px" class="tree-folder">&#128193; <strong>${esc(node.name)}</strong></div>`;
+            for (const c of node.children) html += renderNode(c, indent + 1);
+            return html;
+        } else {
+            return `<div style="margin-left:${indent*14}px" class="tree-file">&#127909; ${esc(node.name)}</div>`;
+        }
+    }
+    preview.innerHTML = renderNode(bunnyFolderStructure, 0);
+    $('step1-next').style.display = '';
+}
+
+// PASO 2: Conectar Bunny API
+async function connectBunny() {
+    const apiKey = ($('bi-apikey').value || '').trim();
+    const libraryId = ($('bi-libid').value || '').trim();
+    const msg = $('bi-connect-msg');
+    if (!apiKey || !libraryId) { msg.textContent = 'API Key y Library ID son requeridos.'; msg.style.color = 'var(--c-error)'; return; }
+    msg.textContent = 'Conectando con Bunny...'; msg.style.color = 'var(--c-muted)';
+    $('btn-connect-bunny').disabled = true;
+    try {
+        // Guardar config en servidor
+        await api('POST', '/api/bunny/config', { apiKey, libraryId });
+        msg.textContent = 'Conectado. Cargando videos...';
+        const data = await api('GET', `/api/bunny/videos?apiKey=${encodeURIComponent(apiKey)}&libraryId=${encodeURIComponent(libraryId)}`);
+        bunnyVideosFromApi = data.videos || [];
+        msg.textContent = `✓ ${bunnyVideosFromApi.length} videos encontrados en Bunny.`;
+        msg.style.color = 'var(--c-success)';
+        // Ir automáticamente al paso 3 (matching)
+        setTimeout(() => { goToStep(3); doMatching(); }, 600);
+    } catch (err) {
+        msg.textContent = 'Error: ' + err.message; msg.style.color = 'var(--c-error)';
+    } finally {
+        $('btn-connect-bunny').disabled = false;
+    }
+}
+
+// PASO 3: Matching automático
+function doMatching() {
+    $('matching-status').textContent = 'Comparando nombres...';
+    setTimeout(() => {
+        // Construir estructura con matches
+        bunnyMatchedStructure = matchStructure(bunnyFolderStructure.children, bunnyVideosFromApi);
+        const stats = countMatches(bunnyMatchedStructure);
+        $('matching-status').textContent = `Completado: ${stats.matched} coincidencias de ${stats.total} videos.`;
+        setTimeout(() => {
+            renderPreview(bunnyMatchedStructure);
+            $('match-summary').innerHTML = `
+                <div class="s-ok">&#10003; ${stats.matched} videos encontrados y asignados</div>
+                ${stats.unmatched > 0 ? `<div class="s-warn">&#9888; ${stats.unmatched} videos sin coincidencia (quedar&#225;n pendientes)</div>` : ''}
+                <div style="color:var(--c-muted);margin-top:4px">Estructura: ${stats.modules} m&#243;dulos detectados</div>
+            `;
+            goToStep(4);
+        }, 500);
+    }, 300);
+}
+
+function normalizeTitle(str) {
+    return str.toLowerCase()
+        .replace(/\.[^.]+$/, '')          // quitar extensión
+        .replace(/[_\-\[\]()\\.]+/g, ' ') // reemplazar separadores
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function matchStructure(items, bunnyVideos, sortOffset) {
+    const result = [];
+    let sort = sortOffset || 0;
+    for (const item of items) {
+        sort++;
+        if (item.type === 'folder') {
+            result.push({
+                name: item.name,
+                type: 'module',
+                sortOrder: sort,
+                children: matchStructure(item.children, bunnyVideos, 0),
+            });
+        } else {
+            const norm = normalizeTitle(item.name);
+            // Buscar mejor coincidencia en Bunny
+            let best = null, bestScore = 0;
+            for (const bv of bunnyVideos) {
+                const bNorm = normalizeTitle(bv.title);
+                const score = similarityScore(norm, bNorm);
+                if (score > bestScore) { bestScore = score; best = bv; }
+            }
+            const matched = bestScore > 0.4;
+            result.push({
+                name: item.name,
+                type: 'video',
+                sortOrder: sort,
+                fileName: item.name,
+                matched,
+                matchedTitle: matched ? best.title : null,
+                matchedGuid: matched ? best.guid : null,
+                hlsUrl: matched ? best.hlsUrl : null,
+            });
+        }
+    }
+    return result;
+}
+
+function similarityScore(a, b) {
+    if (a === b) return 1;
+    if (a.includes(b) || b.includes(a)) return 0.85;
+    const aWords = new Set(a.split(' ').filter(w => w.length > 2));
+    const bWords = new Set(b.split(' ').filter(w => w.length > 2));
+    let common = 0;
+    for (const w of aWords) if (bWords.has(w)) common++;
+    const total = Math.max(aWords.size, bWords.size);
+    return total > 0 ? common / total : 0;
+}
+
+function countMatches(items) {
+    let matched = 0, unmatched = 0, modules = 0;
+    for (const item of items) {
+        if (item.type === 'module') {
+            modules++;
+            const sub = countMatches(item.children);
+            matched += sub.matched; unmatched += sub.unmatched; modules += sub.modules;
+        } else {
+            if (item.matched) matched++; else unmatched++;
+        }
+    }
+    return { matched, unmatched, total: matched + unmatched, modules };
+}
+
+function renderPreview(items, indent) {
+    indent = indent || 0;
+    let html = '';
+    for (const item of items) {
+        if (item.type === 'module') {
+            html += `<div style="margin-left:${indent*14}px" class="tree-folder">&#128193; <strong>${esc(item.name)}</strong></div>`;
+            html += renderPreview(item.children, indent + 1);
+        } else {
+            const cls = !item.matched ? 'unmatched' : 'matched';
+            const label = item.matched
+                ? `&#127909; ${esc(item.matchedTitle)}`
+                : `&#10007; ${esc(item.fileName)} (sin coincidencia)`;
+            html += `<div style="margin-left:${indent*14}px" class="tree-file ${cls}">${label}</div>`;
+        }
+    }
+    if (indent === 0) $('match-tree-preview').innerHTML = html;
+    return html;
+}
+
+// PASO 5: Ejecutar importación
+async function executeImport() {
+    const courseName = ($('bi-course-name').value || '').trim();
+    const author = ($('bi-course-author').value || '').trim();
+    const msg = $('bi-import-msg');
+    if (!courseName) { msg.textContent = 'El nombre del curso es requerido.'; msg.style.color = 'var(--c-error)'; return; }
+    msg.textContent = 'Importando...'; msg.style.color = 'var(--c-muted)';
+    $('btn-execute-import').disabled = true;
+    try {
+        const result = await api('POST', '/api/bunny/import', {
+            courseName,
+            author,
+            structure: bunnyMatchedStructure,
+        });
+        msg.textContent = `✓ Curso creado: ${result.videos} videos, ${result.modules} módulos.`;
+        msg.style.color = 'var(--c-success)';
+        setTimeout(() => {
+            closeBunnyImportModal();
+            loadCourses();
+        }, 1500);
+    } catch (err) {
+        msg.textContent = 'Error: ' + err.message; msg.style.color = 'var(--c-error)';
+        $('btn-execute-import').disabled = false;
+    }
+}
 
 // ================================================================
 //  DOMINIOS PERMITIDOS

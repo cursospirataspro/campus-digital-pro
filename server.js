@@ -901,11 +901,13 @@ app.get('/api/courses/:id/videos', requireAdmin, (req, res) => {
     res.json({ videos });
 });
 
-/** POST /api/courses/move-video — Mover video a un curso */
+/** POST /api/courses/move-video — Mover video a un curso (y opcionalmente a un módulo) */
 app.post('/api/courses/move-video', requireAdmin, (req, res) => {
-    const { videoId, courseId } = req.body || {};
+    const { videoId, courseId, moduleId } = req.body || {};
     if (!videoId) return res.status(400).json({ error: 'videoId requerido' });
     db.moveVideoToCourse(videoId, courseId || null);
+    // Si se indica módulo, asignarlo; si moduleId===null explícito, desasignar
+    if (moduleId !== undefined) db.moveVideoToModule(videoId, moduleId || null);
     syncCatalogSeed();
     res.json({ ok: true });
 });
@@ -930,8 +932,208 @@ app.post('/api/courses/reorder', requireAdmin, (req, res) => {
     res.json({ ok: true });
 });
 
+// ================================================================
+//  RUTAS: MÓDULOS [ADMIN]
+// ================================================================
+
+/** GET /api/courses/:id/modules — Lista todos los módulos de un curso */
+app.get('/api/courses/:id/modules', requireAdmin, (req, res) => {
+    const modules = db.getModulesByCourse(req.params.id);
+    res.json({ modules });
+});
+
+/** POST /api/courses/:id/modules — Crea un módulo (o submódulo con parentId) */
+app.post('/api/courses/:id/modules', requireAdmin, (req, res) => {
+    const { name, parentId, sortOrder } = req.body || {};
+    if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name requerido' });
+    const id = uuidv4();
+    const mod = db.createModule({ id, courseId: req.params.id, parentId: parentId || null, name, sortOrder: sortOrder || 0 });
+    res.status(201).json(mod);
+});
+
+/** PUT /api/modules/:id — Renombra o reordena un módulo */
+app.put('/api/modules/:id', requireAdmin, (req, res) => {
+    const { name, sortOrder } = req.body || {};
+    if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name requerido' });
+    const mod = db.updateModule(req.params.id, { name, sortOrder: sortOrder || 0 });
+    if (!mod) return res.status(404).json({ error: 'Módulo no encontrado' });
+    res.json(mod);
+});
+
+/** DELETE /api/modules/:id — Elimina un módulo (y sus hijos; videos quedan sin módulo) */
+app.delete('/api/modules/:id', requireAdmin, (req, res) => {
+    db.deleteModule(req.params.id);
+    res.json({ ok: true });
+});
+
+/** POST /api/courses/set-module — Asigna un video a un módulo específico */
+app.post('/api/courses/set-module', requireAdmin, (req, res) => {
+    const { videoId, moduleId } = req.body || {};
+    if (!videoId) return res.status(400).json({ error: 'videoId requerido' });
+    db.moveVideoToModule(videoId, moduleId || null);
+    res.json({ ok: true });
+});
+
+// ================================================================
+//  RUTAS: BUNNY.NET API IMPORT [ADMIN]
+// ================================================================
+
+/** GET /api/bunny/config — Devuelve si hay config guardada (sin exponer la key) */
+app.get('/api/bunny/config', requireAdmin, (req, res) => {
+    const hasKey = !!db.getConfig('bunny_api_key');
+    const libraryId = db.getConfig('bunny_library_id') || '';
+    const cdnHostname = db.getConfig('bunny_cdn_hostname') || '';
+    res.json({ configured: hasKey, libraryId, cdnHostname });
+});
+
+/** POST /api/bunny/config — Guarda API key, library ID y CDN hostname */
+app.post('/api/bunny/config', requireAdmin, (req, res) => {
+    const { apiKey, libraryId, cdnHostname } = req.body || {};
+    if (!apiKey || !libraryId) return res.status(400).json({ error: 'apiKey y libraryId requeridos' });
+    db.setConfig('bunny_api_key', apiKey.trim());
+    db.setConfig('bunny_library_id', libraryId.trim());
+    if (cdnHostname) db.setConfig('bunny_cdn_hostname', cdnHostname.trim());
+    res.json({ ok: true });
+});
+
 /**
- * POST /api/admin/update-credentials  [ADMIN]
+ * GET /api/bunny/videos — Obtiene todos los videos de la biblioteca Bunny configurada.
+ * Pagina automáticamente (Bunny devuelve max 100 por página).
+ */
+app.get('/api/bunny/videos', requireAdmin, async (req, res) => {
+    const apiKey = req.query.apiKey || db.getConfig('bunny_api_key');
+    const libraryId = req.query.libraryId || db.getConfig('bunny_library_id');
+    if (!apiKey || !libraryId) return res.status(400).json({ error: 'Bunny API key y library ID requeridos. Configúralos primero.' });
+
+    try {
+        const allVideos = [];
+        let page = 1;
+        const perPage = 100;
+        let total = Infinity;
+
+        while (allVideos.length < total) {
+            const data = await bunnyApiRequest(`/library/${libraryId}/videos?accessKey=${encodeURIComponent(apiKey)}&page=${page}&itemsPerPage=${perPage}&orderBy=title`);
+            if (!data.items || !data.items.length) break;
+            total = data.totalItems || data.items.length;
+            allVideos.push(...data.items);
+            if (allVideos.length >= total || data.items.length < perPage) break;
+            page++;
+        }
+
+        // Detectar CDN hostname desde los videos si no está guardado
+        let cdnHostname = db.getConfig('bunny_cdn_hostname') || '';
+        if (!cdnHostname) {
+            // Intento: buscar en catálogo existente alguna bunnyUrl para extraer hostname
+            const catalog = db.loadCatalog();
+            const sample = catalog.find(v => v.bunnyUrl && v.bunnyUrl.includes('.b-cdn.net'));
+            if (sample) {
+                const match = sample.bunnyUrl.match(/^(https:\/\/[^/]+)/);
+                if (match) { cdnHostname = match[1]; db.setConfig('bunny_cdn_hostname', cdnHostname); }
+            }
+        }
+
+        const videos = allVideos.map(v => ({
+            guid: v.guid,
+            title: v.title || v.guid,
+            status: v.status, // 4=ready
+            hlsUrl: cdnHostname ? `${cdnHostname}/${v.guid}/playlist.m3u8` : null,
+            dateUploaded: v.dateUploaded,
+        }));
+
+        res.json({ videos, cdnHostname, total: videos.length });
+    } catch (err) {
+        res.status(502).json({ error: 'Error conectando Bunny API: ' + err.message });
+    }
+});
+
+/**
+ * POST /api/bunny/import — Crea un curso completo con estructura de módulos.
+ * Body: { courseName, author, apiKey, libraryId, cdnHostname, structure }
+ * structure: [{ name, type:'module'|'video', children:[], fileName, matchedGuid, matchedTitle, hlsUrl }]
+ */
+app.post('/api/bunny/import', requireAdmin, async (req, res) => {
+    const { courseName, author, apiKey: reqApiKey, libraryId: reqLibId, cdnHostname: reqCdn, structure } = req.body || {};
+    if (!courseName) return res.status(400).json({ error: 'courseName requerido' });
+    if (!Array.isArray(structure)) return res.status(400).json({ error: 'structure requerida (array)' });
+
+    const apiKey = reqApiKey || db.getConfig('bunny_api_key');
+    const libraryId = reqLibId || db.getConfig('bunny_library_id');
+    const cdnHostname = reqCdn || db.getConfig('bunny_cdn_hostname') || '';
+
+    if (!apiKey || !libraryId) return res.status(400).json({ error: 'Bunny API key y library ID requeridos' });
+
+    try {
+        // Crear el curso
+        const courseId = uuidv4();
+        db.createCourse({ id: courseId, name: courseName.trim().slice(0, 120), author: (author || '').trim().slice(0, 100) });
+
+        let videoSortOrder = 1;
+
+        // Función recursiva para procesar la estructura
+        function processItems(items, parentModuleId) {
+            for (const item of items) {
+                if (item.type === 'module') {
+                    const modId = uuidv4();
+                    db.createModule({ id: modId, courseId, parentId: parentModuleId || null, name: item.name, sortOrder: item.sortOrder || 0 });
+                    if (Array.isArray(item.children)) {
+                        processItems(item.children, modId);
+                    }
+                } else if (item.type === 'video' && item.hlsUrl) {
+                    if (!isSafeBunnyUrl(item.hlsUrl)) return;
+                    const videoId = uuidv4();
+                    const { keyId } = generateKey(videoId);
+                    db.addToCatalog({
+                        videoId,
+                        title: (item.matchedTitle || item.fileName || item.name || 'Video').slice(0, 120),
+                        status: 'ready',
+                        sourceType: 'bunny',
+                        bunnyUrl: item.hlsUrl,
+                        keyId,
+                        courseId,
+                        sortOrder: videoSortOrder++,
+                        uploadedAt: new Date().toISOString(),
+                    });
+                    if (parentModuleId) db.moveVideoToModule(videoId, parentModuleId);
+                }
+            }
+        }
+
+        processItems(structure, null);
+        syncCatalogSeed();
+
+        const course = db.getCourseById(courseId);
+        const modules = db.getModulesByCourse(courseId);
+        const videos = db.getCatalogByCourse(courseId);
+        res.status(201).json({ ok: true, courseId, course, modules: modules.length, videos: videos.length });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+/** Helper: llama a la API de Bunny Stream (video.bunnycdn.com) */
+function bunnyApiRequest(path) {
+    return new Promise((resolve, reject) => {
+        const opts = {
+            hostname: 'video.bunnycdn.com',
+            path,
+            method: 'GET',
+            headers: { Accept: 'application/json' },
+        };
+        const req = https.request(opts, (res) => {
+            let raw = '';
+            res.on('data', c => raw += c);
+            res.on('end', () => {
+                try { resolve(JSON.parse(raw)); }
+                catch { reject(new Error('Respuesta inválida de Bunny API')); }
+            });
+        });
+        req.on('error', reject);
+        req.setTimeout(30000, () => { req.destroy(); reject(new Error('Timeout Bunny API')); });
+        req.end();
+    });
+}
+
+/**
  * Actualiza ADMIN_USER y ADMIN_PASS en Render env vars.
  * Body: { newUser, newPass }
  */

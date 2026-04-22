@@ -34,6 +34,7 @@ try { db.exec("ALTER TABLE catalog ADD COLUMN source_type TEXT NOT NULL DEFAULT 
 try { db.exec('ALTER TABLE catalog ADD COLUMN bunny_url TEXT'); } catch {}
 try { db.exec('ALTER TABLE catalog ADD COLUMN course_id TEXT'); } catch {}
 try { db.exec('ALTER TABLE catalog ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0'); } catch {}
+try { db.exec('ALTER TABLE catalog ADD COLUMN module_id TEXT'); } catch {}
 
 // ================================================================
 //  ESQUEMA
@@ -102,6 +103,22 @@ CREATE TABLE IF NOT EXISTS courses (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_catalog_course ON catalog(course_id);
+
+CREATE TABLE IF NOT EXISTS modules (
+    id         TEXT PRIMARY KEY,
+    course_id  TEXT NOT NULL,
+    parent_id  TEXT,
+    name       TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_modules_course ON modules(course_id);
+CREATE INDEX IF NOT EXISTS idx_modules_parent ON modules(parent_id);
+
+CREATE TABLE IF NOT EXISTS app_config (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT ''
+);
 `);
 
 // ================================================================
@@ -154,6 +171,21 @@ const stmts = {
     updateCatalogCourse:  db.prepare('UPDATE catalog SET course_id = ?, sort_order = ? WHERE video_id = ?'),
     updateCatalogSort:    db.prepare('UPDATE catalog SET sort_order = ? WHERE video_id = ?'),
     deleteCatalog:        db.prepare('DELETE FROM catalog WHERE video_id = ?'),
+
+    // --- Modules ---
+    getAllModulesByCourse:    db.prepare('SELECT * FROM modules WHERE course_id = ? ORDER BY sort_order ASC, created_at ASC'),
+    getModuleById:           db.prepare('SELECT * FROM modules WHERE id = ?'),
+    insertModule:            db.prepare('INSERT INTO modules (id, course_id, parent_id, name, sort_order, created_at) VALUES (@id, @course_id, @parent_id, @name, @sort_order, @created_at)'),
+    updateModule:            db.prepare('UPDATE modules SET name = @name, sort_order = @sort_order WHERE id = @id'),
+    deleteModule:            db.prepare('DELETE FROM modules WHERE id = ?'),
+    deleteModuleChildren:    db.prepare('DELETE FROM modules WHERE parent_id = ?'),
+    deleteModulesByCourse:   db.prepare('DELETE FROM modules WHERE course_id = ?'),
+    unassignModuleVideos:    db.prepare('UPDATE catalog SET module_id = NULL WHERE module_id = ?'),
+    updateCatalogModule:     db.prepare('UPDATE catalog SET module_id = ? WHERE video_id = ?'),
+
+    // --- Config ---
+    getConfig:  db.prepare('SELECT value FROM app_config WHERE key = ?'),
+    setConfig:  db.prepare('INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)'),
 
     // --- Courses ---
     getAllCourses:        db.prepare('SELECT * FROM courses ORDER BY sort_order ASC, created_at DESC'),
@@ -347,6 +379,7 @@ function rowToCatalog(r) {
         bunnyUrl:     r.bunny_url || null,
         courseId:     r.course_id || null,
         sortOrder:    r.sort_order || 0,
+        moduleId:     r.module_id || null,
     };
 }
 
@@ -514,6 +547,7 @@ module.exports.updateCourse = (id, { name, author }) => {
 
 module.exports.deleteCourse = (id) => {
     stmts.unassignCourseVideos.run(id);
+    stmts.deleteModulesByCourse.run(id);
     stmts.deleteCourse.run(id);
 };
 
@@ -536,3 +570,77 @@ module.exports.getCatalogByCourse = (courseId) =>
 
 module.exports.getCatalogUnassigned = () =>
     stmts.getCatalogUnassigned.all().map(rowToCatalog);
+
+// ================================================================
+//  API — MODULES
+// ================================================================
+
+function rowToModule(r) {
+    if (!r) return null;
+    return { id: r.id, courseId: r.course_id, parentId: r.parent_id || null, name: r.name, sortOrder: r.sort_order, createdAt: r.created_at };
+}
+
+module.exports.getModulesByCourse = (courseId) =>
+    stmts.getAllModulesByCourse.all(courseId).map(rowToModule);
+
+module.exports.getModuleById = (id) =>
+    rowToModule(stmts.getModuleById.get(id));
+
+module.exports.createModule = ({ id, courseId, parentId, name, sortOrder }) => {
+    stmts.insertModule.run({
+        id, course_id: courseId, parent_id: parentId || null,
+        name: name.trim().slice(0, 120), sort_order: sortOrder || 0,
+        created_at: new Date().toISOString(),
+    });
+    return rowToModule(stmts.getModuleById.get(id));
+};
+
+module.exports.updateModule = (id, { name, sortOrder }) => {
+    const existing = stmts.getModuleById.get(id);
+    if (!existing) return null;
+    stmts.updateModule.run({ id, name: name.trim().slice(0, 120), sort_order: sortOrder !== undefined ? sortOrder : existing.sort_order });
+    return rowToModule(stmts.getModuleById.get(id));
+};
+
+/** Elimina un módulo, sus hijos, y desasigna los videos */
+module.exports.deleteModule = (id) => {
+    const tx = db.transaction(() => {
+        // Desasignar videos del módulo
+        stmts.unassignModuleVideos.run(id);
+        // Obtener hijos directos y limpiarlos recursivamente
+        const children = stmts.getAllModulesByCourse.all(
+            stmts.getModuleById.get(id)?.course_id || ''
+        ).filter(m => m.parent_id === id);
+        for (const child of children) {
+            stmts.unassignModuleVideos.run(child.id);
+            stmts.deleteModuleChildren.run(child.id);
+            stmts.deleteModule.run(child.id);
+        }
+        stmts.deleteModuleChildren.run(id);
+        stmts.deleteModule.run(id);
+    });
+    tx();
+};
+
+/** Elimina todos los módulos de un curso (al borrar el curso) */
+module.exports.deleteModulesByCourse = (courseId) => {
+    stmts.deleteModulesByCourse.run(courseId);
+};
+
+/** Asigna un video a un módulo (o lo desasigna si moduleId=null) */
+module.exports.moveVideoToModule = (videoId, moduleId) => {
+    stmts.updateCatalogModule.run(moduleId || null, videoId);
+};
+
+// ================================================================
+//  API — APP CONFIG
+// ================================================================
+
+module.exports.getConfig = (key) => {
+    const row = stmts.getConfig.get(key);
+    return row ? row.value : null;
+};
+
+module.exports.setConfig = (key, value) => {
+    stmts.setConfig.run(key, value);
+};
