@@ -3,24 +3,5 @@ services:
     name: campus-digital-pro
     runtime: node
     plan: starter
-    buildCommand: node --version && npm --version && npm install
+    buildCommand: npm install
     startCommand: node server.js
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: PORT
-        value: 10000
-      - key: LOCAL_MODE
-        value: true
-      - key: JWT_EXPIRES_IN
-        value: 2h
-      - key: MEDIA_TOKEN_TTL
-        value: 300
-      - key: JWT_SECRET
-        generateValue: true
-      - key: ADMIN_USER
-        sync: false
-      - key: ADMIN_PASS
-        sync: false
-      - key: PUBLIC_URL
-        sync: false
