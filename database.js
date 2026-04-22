@@ -79,7 +79,8 @@ CREATE TABLE IF NOT EXISTS catalog (
     source_type   TEXT NOT NULL DEFAULT 'local',
     bunny_url     TEXT,
     course_id     TEXT,
-    sort_order    INTEGER NOT NULL DEFAULT 0
+    sort_order    INTEGER NOT NULL DEFAULT 0,
+    module_id     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS active_sessions (
