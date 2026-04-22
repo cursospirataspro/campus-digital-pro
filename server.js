@@ -1115,6 +1115,19 @@ app.get('/api/bunny/videos', requireAdmin, async (req, res) => {
     }
 });
 
+/** GET /api/bunny/library-raw — Devuelve info completa de la libreria (para detectar CDN hostname) */
+app.get('/api/bunny/library-raw', requireAdmin, async (req, res) => {
+    const apiKey = db.getConfig('bunny_api_key');
+    const libraryId = db.getConfig('bunny_library_id');
+    if (!apiKey || !libraryId) return res.status(400).json({ error: 'Bunny API key y library ID no configurados' });
+    try {
+        const data = await bunnyApiRequest(`/library/${libraryId}`, { extraHeaders: { AccessKey: apiKey } });
+        res.json(data);
+    } catch (err) {
+        res.status(502).json({ error: 'Error obteniendo library info: ' + err.message });
+    }
+});
+
 /** GET /api/bunny/libraries — Lista todas las bibliotecas de video de la cuenta Bunny */
 app.get('/api/bunny/libraries', requireAdmin, async (req, res) => {
     const accountKey = (req.query.accountKey || '').trim();
