@@ -788,6 +788,38 @@ app.delete('/api/video/:videoId', requireAdmin, async (req, res) => {
  * Body: { title, bunnyUrl }
  * bunnyUrl ejemplo: https://vz-XXXXXX.b-cdn.net/VIDEO-ID/playlist.m3u8
  */
+
+/**
+ * POST /api/catalog/restore-bulk  [ADMIN]
+ * Restaura un array de videos preservando IDs originales (para recuperación tras reinicio).
+ * Body: { videos: [{ videoId, title, bunnyUrl, courseId, sortOrder, keyId, uploadedAt }] }
+ */
+app.post('/api/catalog/restore-bulk', requireAdmin, (req, res) => {
+    const { videos } = req.body || {};
+    if (!Array.isArray(videos)) return res.status(400).json({ error: 'videos array requerido' });
+    let inserted = 0, skipped = 0;
+    for (const v of videos) {
+        if (!v.videoId || !v.bunnyUrl) { skipped++; continue; }
+        if (!isSafeBunnyUrl(v.bunnyUrl)) { skipped++; continue; }
+        const existing = db.getCatalogById(v.videoId);
+        if (existing) { skipped++; continue; }
+        try {
+            db.addToCatalog({
+                videoId:    v.videoId,
+                title:      (v.title || v.videoId).slice(0, 120),
+                status:     'ready',
+                sourceType: 'bunny',
+                bunnyUrl:   v.bunnyUrl,
+                keyId:      v.keyId || null,
+                courseId:   v.courseId || null,
+                sortOrder:  v.sortOrder || 0,
+                uploadedAt: v.uploadedAt || new Date().toISOString(),
+            });
+            inserted++;
+        } catch { skipped++; }
+    }
+    res.json({ ok: true, inserted, skipped });
+});
 app.post('/api/catalog/add-bunny', requireAdmin, async (req, res) => {
     const { title, bunnyUrl } = req.body || {};
     if (!title || typeof title !== 'string') return res.status(400).json({ error: 'title requerido' });
