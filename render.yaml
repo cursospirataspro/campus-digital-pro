@@ -3,7 +3,7 @@ services:
     name: campus-digital-pro
     runtime: node
     plan: starter
-    buildCommand: npm install
+    buildCommand: node --version && npm --version && npm install
     startCommand: node server.js
     envVars:
       - key: NODE_ENV
