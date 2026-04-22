@@ -1052,16 +1052,19 @@ app.get('/api/bunny/config', requireAdmin, (req, res) => {
     const hasKey = !!db.getConfig('bunny_api_key');
     const libraryId = db.getConfig('bunny_library_id') || '';
     const cdnHostname = db.getConfig('bunny_cdn_hostname') || '';
-    res.json({ configured: hasKey, libraryId, cdnHostname });
+    // accountKey: DB tiene prioridad, si no, usar env var BUNNY_ACCOUNT_KEY
+    const accountKey = db.getConfig('bunny_account_key') || process.env.BUNNY_ACCOUNT_KEY || '';
+    res.json({ configured: hasKey, libraryId, cdnHostname, accountKey });
 });
 
 /** POST /api/bunny/config — Guarda API key, library ID y CDN hostname */
 app.post('/api/bunny/config', requireAdmin, (req, res) => {
-    const { apiKey, libraryId, cdnHostname } = req.body || {};
+    const { apiKey, libraryId, cdnHostname, accountKey } = req.body || {};
     if (!apiKey || !libraryId) return res.status(400).json({ error: 'apiKey y libraryId requeridos' });
     db.setConfig('bunny_api_key', apiKey.trim());
     db.setConfig('bunny_library_id', libraryId.trim());
     if (cdnHostname) db.setConfig('bunny_cdn_hostname', cdnHostname.trim());
+    if (accountKey) db.setConfig('bunny_account_key', accountKey.trim());
     res.json({ ok: true });
 });
 
@@ -1113,6 +1116,14 @@ app.get('/api/bunny/videos', requireAdmin, async (req, res) => {
     } catch (err) {
         res.status(502).json({ error: 'Error conectando Bunny API: ' + err.message });
     }
+});
+
+/** POST /api/bunny/save-account-key — Guarda la account key de Bunny permanentemente en DB */
+app.post('/api/bunny/save-account-key', requireAdmin, (req, res) => {
+    const { accountKey } = req.body || {};
+    if (!accountKey) return res.status(400).json({ error: 'accountKey requerida' });
+    db.setConfig('bunny_account_key', accountKey.trim());
+    res.json({ ok: true });
 });
 
 /** GET /api/bunny/library-raw — Devuelve info completa de la libreria (para detectar CDN hostname) */

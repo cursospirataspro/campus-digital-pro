@@ -555,7 +555,7 @@
                     <div class="form-row" style="margin-bottom:10px">
                         <label>API Key de cuenta Bunny.net</label>
                         <div style="display:flex;gap:8px">
-                            <input type="password" id="bi-account-key" maxlength="80" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" style="flex:1">
+                            <input type="password" id="bi-account-key" maxlength="100" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" style="flex:1">
                             <button class="btn btn-ghost" onclick="loadBunnyLibraries()" id="btn-load-libs" style="white-space:nowrap">Cargar bibliotecas</button>
                         </div>
                     </div>
@@ -1413,9 +1413,17 @@ let bunnyMatchedStructure = null; // estructura final con matches
 let currentBunnyStep = 1;
 let selectedLibrary = null;      // biblioteca seleccionada { id, name, apiKey }
 
-function openBunnyImportModal() {
+async function openBunnyImportModal() {
     resetBunnyImport();
     $('bunny-import-modal-bg').classList.add('active');
+    // Auto-cargar la account key guardada y las bibliotecas
+    try {
+        const cfg = await api('GET', '/api/bunny/config');
+        if (cfg.accountKey) {
+            $('bi-account-key').value = cfg.accountKey;
+            await loadBunnyLibraries();
+        }
+    } catch(e) { /* silencioso */ }
 }
 function closeBunnyImportModal() {
     $('bunny-import-modal-bg').classList.remove('active');
@@ -1430,7 +1438,7 @@ function resetBunnyImport() {
     $('step1-next').style.display = 'none';
     $('bi-connect-msg').textContent = '';
     $('bi-import-msg').textContent = '';
-    if ($('bi-account-key')) $('bi-account-key').value = '';
+    // No limpiar la account key (se recarga desde el servidor al abrir)
     if ($('bi-libs-list')) { $('bi-libs-list').style.display = 'none'; $('bi-libs-list').innerHTML = ''; }
     const _bc = $('btn-connect-bunny'); if (_bc) _bc.disabled = true;
 }
@@ -1521,17 +1529,24 @@ async function loadBunnyLibraries() {
         const data = await api('GET', '/api/bunny/libraries?accountKey=' + encodeURIComponent(accountKey));
         const libs = data.libraries || [];
         if (!libs.length) { msg.textContent = 'No se encontraron bibliotecas.'; msg.style.color = 'var(--c-warn)'; return; }
+        // Guardar la account key en DB para uso futuro
+        try { await api('POST', '/api/bunny/save-account-key', { accountKey }); } catch(e) {}
         selectedLibrary = null;
         $('btn-connect-bunny').disabled = true;
         const listEl = $('bi-libs-list');
         listEl.style.display = '';
+        // Construir con data-attributes para evitar bugs de comillas en onclick
         listEl.innerHTML = libs.map(l =>
-            `<div class="lib-option" onclick="selectLibrary('${l.id}',${JSON.stringify(l.name)},${JSON.stringify(l.apiKey)})" id="lib-${l.id}">
+            `<div class="lib-option" data-libid="${esc(String(l.id))}" data-libname="${esc(l.name)}" data-libapikey="${esc(l.apiKey)}" id="lib-${l.id}">
                 <span>&#128193;</span>
                 <span class="lib-name">${esc(l.name)}</span>
                 <span class="lib-id">ID: ${l.id}</span>
             </div>`
         ).join('');
+        // Adjuntar eventos click via JS (no inline onclick)
+        listEl.querySelectorAll('.lib-option').forEach(el => {
+            el.addEventListener('click', () => selectLibrary(el.dataset.libid, el.dataset.libname, el.dataset.libapikey));
+        });
         msg.textContent = libs.length + ' biblioteca(s) encontrada(s). Selecciona una.';
         msg.style.color = 'var(--c-success)';
     } catch (err) {
