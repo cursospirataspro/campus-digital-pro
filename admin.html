@@ -613,6 +613,7 @@
     <div id="bulk-bar" class="bulk-bar">
         <span class="bulk-count" id="bulk-count">0 seleccionados</span>
         <button class="btn-bulk-move" onclick="openBulkMoveModal()">Mover seleccionados</button>
+        <button class="btn-bulk-move" style="background:#dc2626" onclick="deleteSelectedVideos()">Eliminar seleccionados</button>
         <button class="btn-bulk-cancel" onclick="clearBulkSelection()">Cancelar</button>
     </div>
 
@@ -1312,6 +1313,18 @@ async function deleteVideo(videoId) {
     } catch (err) { alert('Error: ' + err.message); }
 }
 
+async function deleteSelectedVideos() {
+    const ids = Array.from(bulkSelectedIds);
+    if (!ids.length) return;
+    if (!confirm('Eliminar ' + ids.length + ' video' + (ids.length > 1 ? 's' : '') + ' seleccionado' + (ids.length > 1 ? 's' : '') + '? Esta accion no se puede deshacer.')) return;
+    try {
+        const result = await api('DELETE', '/api/video/bulk', { videoIds: ids });
+        clearBulkSelection();
+        loadCourseVideos(currentCourseId);
+        alert('\u2713 ' + result.deleted + ' video' + (result.deleted > 1 ? 's eliminados.' : ' eliminado.'));
+    } catch (err) { alert('Error: ' + err.message); }
+}
+
 // Cargar catalogo legacy (para compatibilidad con el nav)
 function loadCatalog() { showCoursesView(); }
 
@@ -1537,7 +1550,7 @@ async function loadBunnyLibraries() {
         listEl.style.display = '';
         // Construir con data-attributes para evitar bugs de comillas en onclick
         listEl.innerHTML = libs.map(l =>
-            `<div class="lib-option" data-libid="${esc(String(l.id))}" data-libname="${esc(l.name)}" data-libapikey="${esc(l.apiKey)}" id="lib-${l.id}">
+            `<div class="lib-option" data-libid="${esc(String(l.id))}" data-libname="${esc(l.name)}" data-libapikey="${esc(l.apiKey)}" data-pullzoneurl="${esc(l.pullZoneUrl||'')}" id="lib-${l.id}">
                 <span>&#128193;</span>
                 <span class="lib-name">${esc(l.name)}</span>
                 <span class="lib-id">ID: ${l.id}</span>
@@ -1545,7 +1558,7 @@ async function loadBunnyLibraries() {
         ).join('');
         // Adjuntar eventos click via JS (no inline onclick)
         listEl.querySelectorAll('.lib-option').forEach(el => {
-            el.addEventListener('click', () => selectLibrary(el.dataset.libid, el.dataset.libname, el.dataset.libapikey));
+            el.addEventListener('click', () => selectLibrary(el.dataset.libid, el.dataset.libname, el.dataset.libapikey, el.dataset.pullzoneurl));
         });
         msg.textContent = libs.length + ' biblioteca(s) encontrada(s). Selecciona una.';
         msg.style.color = 'var(--c-success)';
@@ -1556,8 +1569,8 @@ async function loadBunnyLibraries() {
     }
 }
 
-function selectLibrary(id, name, apiKey) {
-    selectedLibrary = { id, name, apiKey };
+function selectLibrary(id, name, apiKey, pullZoneUrl) {
+    selectedLibrary = { id, name, apiKey, pullZoneUrl: pullZoneUrl || '' };
     document.querySelectorAll('.lib-option').forEach(el => el.classList.remove('selected'));
     const el = $('lib-' + id);
     if (el) el.classList.add('selected');
@@ -1569,11 +1582,11 @@ function selectLibrary(id, name, apiKey) {
 async function connectBunny() {
     const msg = $('bi-connect-msg');
     if (!selectedLibrary) { msg.textContent = 'Selecciona una biblioteca primero.'; msg.style.color = 'var(--c-error)'; return; }
-    const { id: libraryId, apiKey } = selectedLibrary;
+    const { id: libraryId, apiKey, pullZoneUrl } = selectedLibrary;
     msg.textContent = 'Cargando videos de la biblioteca...'; msg.style.color = 'var(--c-muted)';
     $('btn-connect-bunny').disabled = true;
     try {
-        await api('POST', '/api/bunny/config', { apiKey, libraryId: String(libraryId) });
+        await api('POST', '/api/bunny/config', { apiKey, libraryId: String(libraryId), cdnHostname: pullZoneUrl || '' });
         const data = await api('GET', `/api/bunny/videos?apiKey=${encodeURIComponent(apiKey)}&libraryId=${encodeURIComponent(String(libraryId))}`);
         bunnyVideosFromApi = data.videos || [];
         msg.textContent = `\u2713 ${bunnyVideosFromApi.length} videos encontrados en Bunny.`;

@@ -778,6 +778,34 @@ app.get('/api/video/catalog/export-seed', requireAdmin, (req, res) => {
 });
 
 /**
+/**
+ * DELETE /api/video/bulk  [ADMIN]
+ * Elimina múltiples videos del catálogo en una sola petición.
+ * Body: { videoIds: string[] }
+ */
+app.delete('/api/video/bulk', requireAdmin, async (req, res) => {
+    const { videoIds } = req.body || {};
+    if (!Array.isArray(videoIds) || !videoIds.length) return res.status(400).json({ error: 'videoIds (array) requerido' });
+    // Validar cada ID antes de borrar
+    for (const id of videoIds) {
+        if (!/^[0-9a-f-]{36}$/i.test(id)) return res.status(400).json({ error: 'videoId inválido: ' + id });
+    }
+    let deleted = 0;
+    for (const videoId of videoIds) {
+        try {
+            db.deleteCatalogEntry(videoId);
+            if (LOCAL_MODE) {
+                const dir = path.join('./public/hls', 'hls', videoId);
+                if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+            }
+            deleted++;
+        } catch (e) { /* skip single failures */ }
+    }
+    syncCatalogSeed();
+    res.json({ ok: true, deleted });
+});
+
+/**
  * DELETE /api/video/:videoId  [ADMIN]
  * Elimina un video del catálogo (y sus archivos si es modo local).
  */
@@ -1149,7 +1177,12 @@ app.get('/api/bunny/libraries', requireAdmin, async (req, res) => {
             extraHeaders: { AccessKey: accountKey },
         });
         const items = data.Items || data.items || [];
-        const libraries = items.map(l => ({ id: l.Id || l.id, name: l.Name || l.name, apiKey: l.ApiKey || l.apiKey || '' }));
+        const libraries = items.map(l => ({
+            id: l.Id || l.id,
+            name: l.Name || l.name,
+            apiKey: l.ApiKey || l.apiKey || '',
+            pullZoneUrl: l.PullZoneUrl ? l.PullZoneUrl.replace(/\/$/, '') : ''
+        }));
         res.json({ libraries });
     } catch (err) {
         res.status(502).json({ error: 'Error listando bibliotecas Bunny: ' + err.message });
