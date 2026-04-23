@@ -300,7 +300,7 @@ app.use((req, res, next) => {
     const dbDomains = db.getAllowedDomains();
     const frameAncestors = ["'self'", ...dbDomains, 'https://*.base44.com', 'https://*.base44.app'].join(' ');
     res.setHeader('Content-Security-Policy', `frame-ancestors ${frameAncestors}`);
-    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('Permissions-Policy', 'camera=(), microphone=()');
     // Deshabilitar caché para rutas de API y DRM
     if (req.path.startsWith('/api/')) {
