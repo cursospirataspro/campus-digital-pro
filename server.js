@@ -1123,7 +1123,15 @@ app.get('/api/bunny/videos', requireAdmin, async (req, res) => {
         // Detectar CDN hostname desde los videos si no está guardado
         let cdnHostname = db.getConfig('bunny_cdn_hostname') || '';
         if (!cdnHostname) {
-            // Intento: buscar en catálogo existente alguna bunnyUrl para extraer hostname
+            // Intento 1: extraer hostname del thumbnailUrl de cualquier video (más confiable)
+            const sampleVideo = allVideos.find(v => v.thumbnailUrl && v.thumbnailUrl.includes('.b-cdn.net'));
+            if (sampleVideo) {
+                const match = sampleVideo.thumbnailUrl.match(/^(https:\/\/[^/]+)/);
+                if (match) { cdnHostname = match[1]; db.setConfig('bunny_cdn_hostname', cdnHostname); }
+            }
+        }
+        if (!cdnHostname) {
+            // Intento 2: buscar en catálogo existente alguna bunnyUrl para extraer hostname
             const catalog = db.loadCatalog();
             const sample = catalog.find(v => v.bunnyUrl && v.bunnyUrl.includes('.b-cdn.net'));
             if (sample) {
