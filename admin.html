@@ -1547,7 +1547,9 @@ async function connectBunny() {
     const apiKey = ($('bi-library-apikey').value || '').trim();
     if (!libraryId) { msg.textContent = 'Ingresa el ID de biblioteca.'; msg.style.color = 'var(--c-error)'; return; }
     if (!apiKey) { msg.textContent = 'Ingresa la API Key de biblioteca.'; msg.style.color = 'var(--c-error)'; return; }
-    const cdnHostnameManual = ($('bi-cdn-hostname').value || '').trim().replace(/\/$/, '');
+    let cdnHostnameManual = ($('bi-cdn-hostname').value || '').trim().replace(/\/$/, '');
+    // Añadir https:// si el usuario no lo incluyó
+    if (cdnHostnameManual && !/^https?:\/\//i.test(cdnHostnameManual)) cdnHostnameManual = 'https://' + cdnHostnameManual;
     selectedLibrary = { id: libraryId, name: 'Biblioteca ' + libraryId, apiKey, pullZoneUrl: cdnHostnameManual };
     const pullZoneUrl = cdnHostnameManual;
     msg.textContent = 'Cargando videos de la biblioteca...'; msg.style.color = 'var(--c-muted)';

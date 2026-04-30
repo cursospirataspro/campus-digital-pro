@@ -1091,7 +1091,11 @@ app.post('/api/bunny/config', requireAdmin, (req, res) => {
     if (!apiKey || !libraryId) return res.status(400).json({ error: 'apiKey y libraryId requeridos' });
     db.setConfig('bunny_api_key', apiKey.trim());
     db.setConfig('bunny_library_id', libraryId.trim());
-    if (cdnHostname) db.setConfig('bunny_cdn_hostname', cdnHostname.trim());
+    if (cdnHostname) {
+        let cdn = cdnHostname.trim().replace(/\/$/, '');
+        if (!/^https?:\/\//i.test(cdn)) cdn = 'https://' + cdn;
+        db.setConfig('bunny_cdn_hostname', cdn);
+    }
     if (accountKey) db.setConfig('bunny_account_key', accountKey.trim());
     res.json({ ok: true });
 });
@@ -1212,7 +1216,8 @@ app.post('/api/bunny/import', requireAdmin, async (req, res) => {
 
     const apiKey = reqApiKey || db.getConfig('bunny_api_key');
     const libraryId = reqLibId || db.getConfig('bunny_library_id');
-    const cdnHostname = reqCdn || db.getConfig('bunny_cdn_hostname') || '';
+    let cdnHostname = reqCdn || db.getConfig('bunny_cdn_hostname') || '';
+    if (cdnHostname && !/^https?:\/\//i.test(cdnHostname)) cdnHostname = 'https://' + cdnHostname;
 
     if (!apiKey || !libraryId) return res.status(400).json({ error: 'Bunny API key y library ID requeridos' });
 
