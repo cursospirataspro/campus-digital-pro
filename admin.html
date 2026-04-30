@@ -301,11 +301,17 @@
         .step-line.done { background: var(--c-success); }
         .step-panel { display: none; }
         .step-panel.active { display: block; }
-        .tree-preview { max-height: 260px; overflow-y: auto; background: var(--c-surface2); border: 1px solid var(--c-border); border-radius: 8px; padding: 12px; font-size: 0.8rem; line-height: 1.7; margin-top: 10px; }
+        .tree-preview { max-height: 420px; overflow-y: auto; background: var(--c-surface2); border: 1px solid var(--c-border); border-radius: 8px; padding: 12px; font-size: 0.8rem; line-height: 1.7; margin-top: 10px; }
         .tree-folder { color: var(--c-warn); }
         .tree-file { color: var(--c-muted); margin-left: 18px; }
         .tree-file.matched { color: var(--c-success); }
         .tree-file.unmatched { color: var(--c-error); }
+        .hls-url-display { font-family: monospace; font-size: 0.68rem; color: #5a9e6f; margin-left: 18px; word-break: break-all; opacity: 0.85; cursor: pointer; padding: 1px 0; display: block; }
+        .hls-url-display:hover { opacity: 1; text-decoration: underline; }
+        .hls-missing-badge { font-size: 0.68rem; color: var(--c-warn); margin-left: 6px; }
+        .manual-assign-row { margin-top: 3px; margin-left: 18px; }
+        .manual-assign-select { background: var(--c-surface); border: 1px solid var(--c-border); color: var(--c-text); font-size: 0.72rem; padding: 3px 6px; border-radius: 4px; max-width: 380px; width: 100%; cursor: pointer; }
+        .manual-assign-select:focus { outline: none; border-color: var(--c-primary); }
         .bunny-summary { background: var(--c-surface2); border-radius: 8px; padding: 14px; margin-top: 10px; font-size: 0.85rem; }
         .bunny-summary .s-ok { color: var(--c-success); }
         .bunny-summary .s-warn { color: var(--c-warn); }
@@ -1425,6 +1431,7 @@ let bunnyVideosFromApi = [];     // videos traídos de la API de Bunny
 let bunnyMatchedStructure = null; // estructura final con matches
 let currentBunnyStep = 1;
 let selectedLibrary = null;      // biblioteca seleccionada { id, name, apiKey }
+let flatPreviewItems = [];       // referencias planas a los items de video en bunnyMatchedStructure
 
 async function openBunnyImportModal() {
     resetBunnyImport();
@@ -1690,6 +1697,7 @@ function countMatches(items) {
 }
 
 function renderPreview(items, indent) {
+    if (indent === undefined || indent === 0) flatPreviewItems = [];
     indent = indent || 0;
     let html = '';
     for (const item of items) {
@@ -1697,15 +1705,68 @@ function renderPreview(items, indent) {
             html += `<div style="margin-left:${indent*14}px" class="tree-folder">&#128193; <strong>${esc(item.name)}</strong></div>`;
             html += renderPreview(item.children, indent + 1);
         } else {
-            const cls = !item.matched ? 'unmatched' : 'matched';
-            const label = item.matched
-                ? `&#127909; ${esc(item.matchedTitle)}`
-                : `&#10007; ${esc(item.fileName)} (sin coincidencia)`;
-            html += `<div style="margin-left:${indent*14}px" class="tree-file ${cls}">${label}</div>`;
+            const idx = flatPreviewItems.length;
+            flatPreviewItems.push(item);
+            if (item.matched) {
+                const hlsBlock = item.hlsUrl
+                    ? `<span class="hls-url-display" title="Clic para copiar" onclick="copyHls(${idx})">${esc(item.hlsUrl)}</span>`
+                    : `<span class="hls-missing-badge">&#9888; Sin URL HLS</span>`;
+                html += `<div style="margin-left:${indent*14}px" class="tree-file matched">&#127909; ${esc(item.matchedTitle)}${hlsBlock}</div>`;
+            } else {
+                const opts = bunnyVideosFromApi.map(v =>
+                    `<option value="${esc(v.guid)}">${esc(v.title)}</option>`
+                ).join('');
+                html += `<div style="margin-left:${indent*14}px" class="tree-file unmatched">
+                    &#10007; ${esc(item.fileName)}
+                    <div class="manual-assign-row">
+                        <select class="manual-assign-select" onchange="onManualAssign(${idx}, this.value)">
+                            <option value="">— Asignar manualmente —</option>
+                            ${opts}
+                        </select>
+                    </div>
+                </div>`;
+            }
         }
     }
     if (indent === 0) $('match-tree-preview').innerHTML = html;
     return html;
+}
+
+function copyHls(idx) {
+    const item = flatPreviewItems[idx];
+    if (!item || !item.hlsUrl) return;
+    navigator.clipboard.writeText(item.hlsUrl).then(() => {
+        // feedback visual breve
+        const spans = $('match-tree-preview').querySelectorAll('.hls-url-display');
+        const span = spans[flatPreviewItems.slice(0, idx + 1).filter(i => i.matched).length - 1];
+        if (span) { const prev = span.textContent; span.textContent = '✓ Copiado'; setTimeout(() => { span.textContent = prev; }, 1200); }
+    }).catch(() => {});
+}
+
+function onManualAssign(idx, guid) {
+    const item = flatPreviewItems[idx];
+    if (!item) return;
+    if (!guid) {
+        item.matched = false;
+        item.matchedTitle = null;
+        item.matchedGuid = null;
+        item.hlsUrl = null;
+    } else {
+        const bv = bunnyVideosFromApi.find(v => v.guid === guid);
+        if (!bv) return;
+        item.matched = true;
+        item.matchedTitle = bv.title;
+        item.matchedGuid = bv.guid;
+        item.hlsUrl = bv.hlsUrl;
+    }
+    // Re-render el árbol y actualizar el resumen
+    renderPreview(bunnyMatchedStructure);
+    const stats = countMatches(bunnyMatchedStructure);
+    $('match-summary').innerHTML = `
+        <div class="s-ok">&#10003; ${stats.matched} videos encontrados y asignados</div>
+        ${stats.unmatched > 0 ? `<div class="s-warn">&#9888; ${stats.unmatched} videos sin coincidencia (quedar&#225;n pendientes)</div>` : ''}
+        <div style="color:var(--c-muted);margin-top:4px">Estructura: ${stats.modules} m&#243;dulos detectados</div>
+    `;
 }
 
 // PASO 5: Ejecutar importación
