@@ -556,20 +556,20 @@
 
                 <!-- PASO 2: Selector de biblioteca Bunny -->
                 <div class="step-panel" id="bstep-2">
-                    <h4 style="margin-bottom:8px">Paso 2 &mdash; Seleccionar biblioteca de Bunny.net</h4>
-                    <p style="color:var(--c-muted);font-size:0.82rem;margin-bottom:14px">Ingresa tu API Key principal de cuenta Bunny.net para ver y seleccionar tu biblioteca.</p>
+                    <h4 style="margin-bottom:8px">Paso 2 &mdash; Conectar biblioteca de Bunny.net</h4>
+                    <p style="color:var(--c-muted);font-size:0.82rem;margin-bottom:14px">Ingresa el ID y la API Key de tu biblioteca Bunny.net.</p>
                     <div class="form-row" style="margin-bottom:10px">
-                        <label>API Key de cuenta Bunny.net</label>
-                        <div style="display:flex;gap:8px">
-                            <input type="password" id="bi-account-key" maxlength="100" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" style="flex:1">
-                            <button class="btn btn-ghost" onclick="loadBunnyLibraries()" id="btn-load-libs" style="white-space:nowrap">Cargar bibliotecas</button>
-                        </div>
+                        <label>ID de Biblioteca</label>
+                        <input type="text" id="bi-library-id" maxlength="20" placeholder="Ej: 640227" style="width:100%">
                     </div>
-                    <div id="bi-libs-list" style="display:none;max-height:240px;overflow-y:auto;margin-bottom:10px"></div>
+                    <div class="form-row" style="margin-bottom:10px">
+                        <label>API Key de Biblioteca</label>
+                        <input type="password" id="bi-library-apikey" maxlength="100" placeholder="xxxxxxxx-xxxx-xxxx-xxxxxxxxxxxx-xxxx-xxxx" style="width:100%">
+                    </div>
                     <div id="bi-connect-msg" style="font-size:0.82rem;margin:8px 0;min-height:18px"></div>
                     <div style="display:flex;gap:8px">
                         <button class="btn btn-ghost" onclick="goToStep(1)">&#8592; Atr&#225;s</button>
-                        <button class="btn btn-red" onclick="connectBunny()" id="btn-connect-bunny" style="flex:1" disabled>Conectar y cargar videos</button>
+                        <button class="btn btn-red" onclick="connectBunny()" id="btn-connect-bunny" style="flex:1">Conectar y cargar videos</button>
                     </div>
                 </div>
 
@@ -1436,13 +1436,11 @@ let flatPreviewItems = [];       // referencias planas a los items de video en b
 async function openBunnyImportModal() {
     resetBunnyImport();
     $('bunny-import-modal-bg').classList.add('active');
-    // Auto-cargar la account key guardada y las bibliotecas
+    // Auto-cargar library config guardada
     try {
         const cfg = await api('GET', '/api/bunny/config');
-        if (cfg.accountKey) {
-            $('bi-account-key').value = cfg.accountKey;
-            await loadBunnyLibraries();
-        }
+        if (cfg.libraryId) $('bi-library-id').value = cfg.libraryId;
+        if (cfg.apiKey) $('bi-library-apikey').value = cfg.apiKey;
     } catch(e) { /* silencioso */ }
 }
 function closeBunnyImportModal() {
@@ -1537,59 +1535,15 @@ function renderFolderTree() {
     $('step1-next').style.display = '';
 }
 
-// PASO 2: Cargar bibliotecas y conectar Bunny API
-async function loadBunnyLibraries() {
-    const accountKey = ($('bi-account-key').value || '').trim();
-    const msg = $('bi-connect-msg');
-    const btnLoad = $('btn-load-libs');
-    if (!accountKey) { msg.textContent = 'Ingresa tu API Key de cuenta Bunny.'; msg.style.color = 'var(--c-error)'; return; }
-    msg.textContent = 'Cargando bibliotecas...'; msg.style.color = 'var(--c-muted)';
-    if (btnLoad) btnLoad.disabled = true;
-    try {
-        const data = await api('GET', '/api/bunny/libraries?accountKey=' + encodeURIComponent(accountKey));
-        const libs = data.libraries || [];
-        if (!libs.length) { msg.textContent = 'No se encontraron bibliotecas.'; msg.style.color = 'var(--c-warn)'; return; }
-        // Guardar la account key en DB para uso futuro
-        try { await api('POST', '/api/bunny/save-account-key', { accountKey }); } catch(e) {}
-        selectedLibrary = null;
-        $('btn-connect-bunny').disabled = true;
-        const listEl = $('bi-libs-list');
-        listEl.style.display = '';
-        // Construir con data-attributes para evitar bugs de comillas en onclick
-        listEl.innerHTML = libs.map(l =>
-            `<div class="lib-option" data-libid="${esc(String(l.id))}" data-libname="${esc(l.name)}" data-libapikey="${esc(l.apiKey)}" data-pullzoneurl="${esc(l.pullZoneUrl||'')}" id="lib-${l.id}">
-                <span>&#128193;</span>
-                <span class="lib-name">${esc(l.name)}</span>
-                <span class="lib-id">ID: ${l.id}</span>
-            </div>`
-        ).join('');
-        // Adjuntar eventos click via JS (no inline onclick)
-        listEl.querySelectorAll('.lib-option').forEach(el => {
-            el.addEventListener('click', () => selectLibrary(el.dataset.libid, el.dataset.libname, el.dataset.libapikey, el.dataset.pullzoneurl));
-        });
-        msg.textContent = libs.length + ' biblioteca(s) encontrada(s). Selecciona una.';
-        msg.style.color = 'var(--c-success)';
-    } catch (err) {
-        msg.textContent = 'Error: ' + err.message; msg.style.color = 'var(--c-error)';
-    } finally {
-        if (btnLoad) btnLoad.disabled = false;
-    }
-}
-
-function selectLibrary(id, name, apiKey, pullZoneUrl) {
-    selectedLibrary = { id, name, apiKey, pullZoneUrl: pullZoneUrl || '' };
-    document.querySelectorAll('.lib-option').forEach(el => el.classList.remove('selected'));
-    const el = $('lib-' + id);
-    if (el) el.classList.add('selected');
-    $('btn-connect-bunny').disabled = false;
-    $('bi-connect-msg').textContent = '\u2713 Seleccionada: ' + name;
-    $('bi-connect-msg').style.color = 'var(--c-success)';
-}
-
+// PASO 2: Conectar directamente con Library ID + API Key
 async function connectBunny() {
     const msg = $('bi-connect-msg');
-    if (!selectedLibrary) { msg.textContent = 'Selecciona una biblioteca primero.'; msg.style.color = 'var(--c-error)'; return; }
-    const { id: libraryId, apiKey, pullZoneUrl } = selectedLibrary;
+    const libraryId = ($('bi-library-id').value || '').trim();
+    const apiKey = ($('bi-library-apikey').value || '').trim();
+    if (!libraryId) { msg.textContent = 'Ingresa el ID de biblioteca.'; msg.style.color = 'var(--c-error)'; return; }
+    if (!apiKey) { msg.textContent = 'Ingresa la API Key de biblioteca.'; msg.style.color = 'var(--c-error)'; return; }
+    selectedLibrary = { id: libraryId, name: 'Biblioteca ' + libraryId, apiKey, pullZoneUrl: '' };
+    const pullZoneUrl = '';
     msg.textContent = 'Cargando videos de la biblioteca...'; msg.style.color = 'var(--c-muted)';
     $('btn-connect-bunny').disabled = true;
     try {
