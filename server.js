@@ -1232,8 +1232,14 @@ app.post('/api/bunny/import', requireAdmin, async (req, res) => {
                     if (Array.isArray(item.children)) {
                         processItems(item.children, modId);
                     }
-                } else if (item.type === 'video' && item.hlsUrl) {
-                    if (!isSafeBunnyUrl(item.hlsUrl)) return;
+                } else if (item.type === 'video') {
+                    // Construir hlsUrl: prioridad: lo que viene del frontend → construir con guid + cdn
+                    let hlsUrl = item.hlsUrl || null;
+                    if (!hlsUrl && item.matchedGuid && cdnHostname) {
+                        hlsUrl = `${cdnHostname}/${item.matchedGuid}/playlist.m3u8`;
+                    }
+                    if (!hlsUrl) continue; // sin guid ni url: saltar
+                    if (!isSafeBunnyUrl(hlsUrl)) continue;
                     const videoId = uuidv4();
                     const { keyId } = generateKey(videoId);
                     db.addToCatalog({
@@ -1241,7 +1247,7 @@ app.post('/api/bunny/import', requireAdmin, async (req, res) => {
                         title: (item.matchedTitle || item.fileName || item.name || 'Video').slice(0, 120),
                         status: 'ready',
                         sourceType: 'bunny',
-                        bunnyUrl: item.hlsUrl,
+                        bunnyUrl: hlsUrl,
                         keyId,
                         courseId,
                         sortOrder: videoSortOrder++,

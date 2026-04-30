@@ -1754,6 +1754,9 @@ async function executeImport() {
         const result = await api('POST', '/api/bunny/import', {
             courseName,
             author,
+            apiKey: selectedLibrary ? selectedLibrary.apiKey : '',
+            libraryId: selectedLibrary ? String(selectedLibrary.id) : '',
+            cdnHostname: selectedLibrary ? (selectedLibrary.pullZoneUrl || '') : '',
             structure: bunnyMatchedStructure,
         });
         msg.textContent = `✓ Curso creado: ${result.videos} videos, ${result.modules} módulos.`;
