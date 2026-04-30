@@ -1456,9 +1456,7 @@ function resetBunnyImport() {
     $('step1-next').style.display = 'none';
     $('bi-connect-msg').textContent = '';
     $('bi-import-msg').textContent = '';
-    // No limpiar la account key (se recarga desde el servidor al abrir)
-    if ($('bi-libs-list')) { $('bi-libs-list').style.display = 'none'; $('bi-libs-list').innerHTML = ''; }
-    const _bc = $('btn-connect-bunny'); if (_bc) _bc.disabled = true;
+    const _bc = $('btn-connect-bunny'); if (_bc) _bc.disabled = false;
 }
 
 function goToStep(n) {
