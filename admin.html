@@ -1554,7 +1554,8 @@ async function connectBunny() {
     $('btn-connect-bunny').disabled = true;
     try {
         await api('POST', '/api/bunny/config', { apiKey, libraryId: String(libraryId), cdnHostname: cdnHostnameManual });
-        const data = await api('GET', `/api/bunny/videos?apiKey=${encodeURIComponent(apiKey)}&libraryId=${encodeURIComponent(String(libraryId))}`);
+        const cdnParam = cdnHostnameManual ? `&cdnHostname=${encodeURIComponent(cdnHostnameManual)}` : '';
+        const data = await api('GET', `/api/bunny/videos?apiKey=${encodeURIComponent(apiKey)}&libraryId=${encodeURIComponent(String(libraryId))}${cdnParam}`);
         bunnyVideosFromApi = data.videos || [];
         msg.textContent = `\u2713 ${bunnyVideosFromApi.length} videos encontrados en Bunny.`;
         msg.style.color = 'var(--c-success)';
@@ -1730,12 +1731,24 @@ function onManualAssign(idx, guid) {
 }
 
 // PASO 5: Ejecutar importación
+function countMatchedVideos(items) {
+    let n = 0;
+    for (const item of items) {
+        if (item.type === 'video' && item.hlsUrl) n++;
+        else if (item.type === 'module' && Array.isArray(item.children)) n += countMatchedVideos(item.children);
+    }
+    return n;
+}
+
 async function executeImport() {
     const courseName = ($('bi-course-name').value || '').trim();
     const author = ($('bi-course-author').value || '').trim();
     const msg = $('bi-import-msg');
     if (!courseName) { msg.textContent = 'El nombre del curso es requerido.'; msg.style.color = 'var(--c-error)'; return; }
-    msg.textContent = 'Importando...'; msg.style.color = 'var(--c-muted)';
+    if (!bunnyMatchedStructure || !bunnyMatchedStructure.length) { msg.textContent = 'Error: no hay estructura cargada. Vuelve al Paso 1.'; msg.style.color = 'var(--c-error)'; return; }
+    const matchedCount = countMatchedVideos(bunnyMatchedStructure);
+    if (matchedCount === 0) { msg.textContent = 'No hay videos con URL HLS asignada. Verifica el CDN Hostname en el Paso 2.'; msg.style.color = 'var(--c-error)'; return; }
+    msg.textContent = `Importando ${matchedCount} videos...`; msg.style.color = 'var(--c-muted)';
     $('btn-execute-import').disabled = true;
     try {
         const result = await api('POST', '/api/bunny/import', {

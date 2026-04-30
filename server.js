@@ -1103,6 +1103,8 @@ app.post('/api/bunny/config', requireAdmin, (req, res) => {
 app.get('/api/bunny/videos', requireAdmin, async (req, res) => {
     const apiKey = req.query.apiKey || db.getConfig('bunny_api_key');
     const libraryId = req.query.libraryId || db.getConfig('bunny_library_id');
+    // cdnHostname puede venir como query param (prioridad) o desde DB
+    const cdnHostnameParam = (req.query.cdnHostname || '').trim().replace(/\/$/, '');
     if (!apiKey || !libraryId) return res.status(400).json({ error: 'Bunny API key y library ID requeridos. Configúralos primero.' });
 
     try {
@@ -1120,8 +1122,9 @@ app.get('/api/bunny/videos', requireAdmin, async (req, res) => {
             page++;
         }
 
-        // Detectar CDN hostname desde los videos si no está guardado
-        let cdnHostname = db.getConfig('bunny_cdn_hostname') || '';
+        // Detectar CDN hostname: prioridad: query param > DB > auto-detección
+        let cdnHostname = cdnHostnameParam || db.getConfig('bunny_cdn_hostname') || '';
+        if (cdnHostnameParam) db.setConfig('bunny_cdn_hostname', cdnHostnameParam); // persist
         if (!cdnHostname) {
             // Intento 1: extraer hostname del thumbnailUrl de cualquier video (más confiable)
             const sampleVideo = allVideos.find(v => v.thumbnailUrl && v.thumbnailUrl.includes('.b-cdn.net'));
