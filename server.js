@@ -2056,6 +2056,216 @@ app.post('/api/playback/event', (req, res) => {
 });
 
 // ================================================================
+//  MONITOR API — Base44 consume estos endpoints para monitoreo
+//  en tiempo real de todo lo que pasa en el reproductor.
+//  Auth: header  Authorization: Bearer <MONITOR_KEY>
+//  La clave se deriva del JWT_SECRET — estable mientras no cambie.
+// ================================================================
+
+const MONITOR_KEY = crypto
+    .createHmac('sha256', JWT_SECRET)
+    .update('campus-monitor-api-2026')
+    .digest('hex')
+    .slice(0, 40);
+
+// Log al arrancar para que el admin pueda copiarla
+console.log(`[monitor] API key: ${MONITOR_KEY}`);
+
+function requireMonitorKey(req, res, next) {
+    const auth = req.headers['authorization'] || '';
+    const key  = auth.startsWith('Bearer ') ? auth.slice(7) : (req.query.key || '');
+    if (!key || key !== MONITOR_KEY) {
+        return res.status(401).json({ error: 'Monitor key inválida' });
+    }
+    next();
+}
+
+/**
+ * GET /api/monitor/key
+ * Devuelve la monitor key (solo accesible con el token de admin JWT).
+ * Base44 llama esto una vez para obtener la clave, luego la guarda en sus secrets.
+ */
+app.get('/api/monitor/key', requireAdmin, (req, res) => {
+    res.json({
+        monitorKey: MONITOR_KEY,
+        hint: 'Usa este valor como  Authorization: Bearer <monitorKey>  en las llamadas a /api/monitor/*',
+        endpoints: [
+            'GET /api/monitor/status',
+            'GET /api/monitor/events?limit=50',
+            'GET /api/monitor/catalog',
+            'GET /api/monitor/students',
+            'GET /api/monitor/activity?limit=100',
+        ],
+    });
+});
+
+/**
+ * GET /api/monitor/status
+ * Snapshot en tiempo real del sistema.
+ */
+app.get('/api/monitor/status', requireMonitorKey, (req, res) => {
+    const catalog  = db.loadCatalog();
+    const students = db.getAllStudents();
+    const courses  = db.getAllCourses();
+    const recent   = db.getAuditLog({ limit: 5 });
+
+    const activeStudents = students.filter(s => s.active).length;
+    const readyVideos    = catalog.filter(v => v.status === 'ready').length;
+
+    res.json({
+        ts:              new Date().toISOString(),
+        system:          'campus-digital-pro',
+        url:             'https://campus-digital-pro.onrender.com',
+        totals: {
+            videos:          catalog.length,
+            videosReady:     readyVideos,
+            courses:         courses.length,
+            students:        students.length,
+            studentsActive:  activeStudents,
+            eventsLogged:    recent.total,
+        },
+        recentActivity: recent.entries.slice(0, 5).map(e => ({
+            studentId:  e.userId,
+            videoId:    e.videoId,
+            eventType:  e.eventType || 'delivery',
+            deviceId:   e.deviceId,
+            ip:         e.ip,
+            at:         e.deliveredAt,
+        })),
+    });
+});
+
+/**
+ * GET /api/monitor/events?limit=50&studentId=X&videoId=Y
+ * Últimos eventos de reproducción registrados.
+ */
+app.get('/api/monitor/events', requireMonitorKey, (req, res) => {
+    const limit     = Math.min(parseInt(req.query.limit) || 50, 500);
+    const studentId = req.query.studentId || null;
+    const videoId   = req.query.videoId   || null;
+
+    const result = db.getAuditLog({ userId: studentId, videoId, limit });
+
+    res.json({
+        ts:     new Date().toISOString(),
+        total:  result.total,
+        count:  result.entries.length,
+        events: result.entries.map(e => ({
+            studentId:  e.userId,
+            videoId:    e.videoId,
+            eventType:  e.eventType || 'delivery',
+            deviceId:   e.deviceId,
+            ip:         e.ip,
+            at:         e.deliveredAt,
+        })),
+    });
+});
+
+/**
+ * GET /api/monitor/catalog
+ * Catálogo completo: todos los cursos con sus videos.
+ */
+app.get('/api/monitor/catalog', requireMonitorKey, (req, res) => {
+    const courses = db.getAllCourses();
+    const catalog = db.loadCatalog();
+
+    const courseMap = {};
+    for (const c of courses) courseMap[c.id] = { ...c, videos: [] };
+
+    const unassigned = [];
+    for (const v of catalog) {
+        const entry = {
+            videoId:   v.videoId,
+            title:     v.title,
+            status:    v.status,
+            playerUrl: `https://campus-digital-pro.onrender.com/?v=${v.videoId}`,
+            sortOrder: v.sortOrder,
+            uploadedAt: v.uploadedAt,
+        };
+        if (v.courseId && courseMap[v.courseId]) {
+            courseMap[v.courseId].videos.push(entry);
+        } else {
+            unassigned.push(entry);
+        }
+    }
+
+    res.json({
+        ts:             new Date().toISOString(),
+        totalVideos:    catalog.length,
+        totalCourses:   courses.length,
+        courses:        Object.values(courseMap).map(c => ({
+            id:         c.id,
+            name:       c.name,
+            author:     c.author,
+            totalVideos: c.videos.length,
+            videos:     c.videos.sort((a, b) => a.sortOrder - b.sortOrder),
+        })),
+        videosUnassigned: unassigned,
+    });
+});
+
+/**
+ * GET /api/monitor/students
+ * Lista de alumnos con estado y actividad.
+ */
+app.get('/api/monitor/students', requireMonitorKey, (req, res) => {
+    const students = db.getAllStudents();
+    res.json({
+        ts:    new Date().toISOString(),
+        total: students.length,
+        students: students.map(s => ({
+            studentId:     s.studentId,
+            email:         s.email,
+            name:          s.name,
+            active:        s.active,
+            deviceBound:   !!s.deviceId,
+            allowsAll:     s.allowedVideos.includes('*'),
+            allowedVideos: s.allowedVideos.includes('*') ? ['*'] : s.allowedVideos,
+            createdAt:     s.createdAt,
+            lastLogin:     s.lastLogin,
+        })),
+    });
+});
+
+/**
+ * GET /api/monitor/activity?limit=100
+ * Actividad reciente enriquecida con nombres de video y curso.
+ */
+app.get('/api/monitor/activity', requireMonitorKey, (req, res) => {
+    const limit  = Math.min(parseInt(req.query.limit) || 100, 500);
+    const result = db.getAuditLog({ limit });
+    const catalog = db.loadCatalog();
+    const courses = db.getAllCourses();
+
+    // Índices rápidos
+    const vidMap    = {};
+    const courseMap = {};
+    for (const v of catalog) vidMap[v.videoId] = v;
+    for (const c of courses) courseMap[c.id]   = c;
+
+    res.json({
+        ts:    new Date().toISOString(),
+        total: result.total,
+        count: result.entries.length,
+        activity: result.entries.map(e => {
+            const vid    = vidMap[e.videoId];
+            const course = vid?.courseId ? courseMap[vid.courseId] : null;
+            return {
+                studentId:   e.userId,
+                videoId:     e.videoId,
+                videoTitle:  vid?.title   || e.videoId,
+                courseName:  course?.name || 'Sin curso',
+                eventType:   e.eventType  || 'delivery',
+                playerUrl:   `https://campus-digital-pro.onrender.com/?v=${e.videoId}`,
+                deviceId:    e.deviceId,
+                ip:          e.ip,
+                at:          e.deliveredAt,
+            };
+        }),
+    });
+});
+
+// ================================================================
 //  BASE44 LIVE — Tracking perpetuo del reproductor hacia Base44
 //  No modifica ningún endpoint existente.
 // ================================================================
