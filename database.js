@@ -681,3 +681,91 @@ module.exports.getConfig = (key) => {
 module.exports.setConfig = (key, value) => {
     stmts.setConfig.run(key, value);
 };
+
+// ================================================================
+//  PLAYBACK SESSIONS EXTERNAS
+//  Tabla para sesiones iniciadas desde reproductores externos.
+//  No toca ninguna tabla existente.
+// ================================================================
+
+// Migración no destructiva: añade event_type a audit_log si no existe
+try { db.exec('ALTER TABLE audit_log ADD COLUMN event_type TEXT'); } catch {}
+
+// Tabla nueva exclusiva para sesiones de reproducción externas
+db.exec(`
+CREATE TABLE IF NOT EXISTS playback_sessions (
+    session_id    TEXT PRIMARY KEY,
+    student_id    TEXT NOT NULL,
+    student_email TEXT NOT NULL,
+    course_id     TEXT NOT NULL,
+    lesson_id     TEXT NOT NULL,
+    device_id     TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    expires_at    TEXT NOT NULL
+);
+`);
+
+const pbStmts = {
+    insertSession:  db.prepare(`
+        INSERT INTO playback_sessions (session_id, student_id, student_email, course_id, lesson_id, device_id, created_at, expires_at)
+        VALUES (@session_id, @student_id, @student_email, @course_id, @lesson_id, @device_id, @created_at, @expires_at)
+    `),
+    getSession:     db.prepare('SELECT * FROM playback_sessions WHERE session_id = ?'),
+    deleteExpired:  db.prepare("DELETE FROM playback_sessions WHERE expires_at < ?"),
+    insertEvent:    db.prepare(`
+        INSERT INTO audit_log (fingerprint, user_id, video_id, device_id, ip, user_agent, delivered_at, event_type)
+        VALUES (@fingerprint, @user_id, @video_id, @device_id, @ip, @user_agent, @delivered_at, @event_type)
+    `),
+};
+
+/** Crea una sesión de reproducción externa. expires_at = ahora + ttlSeconds */
+module.exports.createPlaybackSession = ({ sessionId, studentId, studentEmail, courseId, lessonId, deviceId, ttlSeconds = 900 }) => {
+    const now = new Date();
+    const expires = new Date(now.getTime() + ttlSeconds * 1000);
+    pbStmts.insertSession.run({
+        session_id:    sessionId,
+        student_id:    studentId,
+        student_email: studentEmail,
+        course_id:     courseId,
+        lesson_id:     lessonId,
+        device_id:     deviceId,
+        created_at:    now.toISOString(),
+        expires_at:    expires.toISOString(),
+    });
+};
+
+/** Obtiene una sesión por sessionId. Devuelve null si no existe. */
+module.exports.getPlaybackSession = (sessionId) => {
+    const row = pbStmts.getSession.get(sessionId);
+    if (!row) return null;
+    return {
+        sessionId:    row.session_id,
+        studentId:    row.student_id,
+        studentEmail: row.student_email,
+        courseId:     row.course_id,
+        lessonId:     row.lesson_id,
+        deviceId:     row.device_id,
+        createdAt:    row.created_at,
+        expiresAt:    row.expires_at,
+    };
+};
+
+/** Registra un evento de reproducción en audit_log con su event_type */
+module.exports.logPlaybackEvent = ({ sessionId, studentId, lessonId, deviceId, ip, userAgent, eventType, extra }) => {
+    const fp = `pb:${sessionId}:${eventType}:${Date.now()}`;
+    pbStmts.insertEvent.run({
+        fingerprint:  fp,
+        user_id:      studentId,
+        video_id:     lessonId,
+        device_id:    deviceId || 'unknown',
+        ip:           ip || 'unknown',
+        user_agent:   userAgent || 'unknown',
+        delivered_at: new Date().toISOString(),
+        event_type:   eventType,
+    });
+};
+
+/** Limpia sesiones expiradas de la tabla playback_sessions */
+module.exports.cleanExpiredPlaybackSessions = () => {
+    pbStmts.deleteExpired.run(new Date().toISOString());
+};;

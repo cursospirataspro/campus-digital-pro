@@ -1914,6 +1914,147 @@ app.get('/', (req, res) => {
 });
 app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'admin.html')));
 
+// ================================================================
+//  PLAYBACK API — Capa de comunicación para reproductores externos
+//  No modifica ningún endpoint existente.
+// ================================================================
+
+const PLAYBACK_SESSION_TTL = 900; // 15 minutos en segundos
+const ALLOWED_EVENT_TYPES = new Set([
+    'lesson_opened', 'play_started', 'play_paused', 'play_resumed',
+    'heartbeat', 'lesson_completed', 'lesson_closed', 'playback_error',
+]);
+
+/**
+ * POST /api/playback/session
+ * Inicia una sesión de reproducción desde un reproductor externo.
+ * Valida alumno, dispositivo y acceso al video antes de emitir el token.
+ */
+app.post('/api/playback/session', (req, res) => {
+    const { studentEmail, studentId, deviceId, courseId, lessonId } = req.body || {};
+
+    if (!studentEmail || !studentId || !deviceId || !courseId || !lessonId) {
+        return res.status(400).json({ error: 'Faltan campos requeridos: studentEmail, studentId, deviceId, courseId, lessonId' });
+    }
+
+    const emailNorm = String(studentEmail).trim().toLowerCase();
+    const student = db.findStudentByEmail(emailNorm);
+
+    // Respuesta idéntica para no existente o ID incorrecto (evita enumeración)
+    if (!student || student.studentId !== String(studentId).trim()) {
+        return res.status(401).json({ error: 'Credenciales incorrectas' });
+    }
+    if (!student.active) {
+        return res.status(403).json({ error: 'Acceso desactivado. Contacta al administrador.' });
+    }
+
+    // Validar dispositivo: si ya tiene uno vinculado debe coincidir
+    const fp = String(deviceId).slice(0, 64);
+    if (student.deviceId && student.deviceId !== fp) {
+        return res.status(403).json({ error: 'Dispositivo no autorizado para este acceso.' });
+    }
+
+    // Validar acceso al video (lessonId)
+    const allowed = student.allowedVideos;
+    if (!allowed.includes('*') && !allowed.includes(lessonId)) {
+        return res.status(403).json({ error: 'Sin acceso a este contenido.' });
+    }
+
+    // Vincular dispositivo si es primer acceso
+    if (!student.deviceId) {
+        db.bindDevice(student.id, fp, new Date().toISOString());
+    }
+
+    const sessionId = uuidv4();
+    const now = new Date().toISOString();
+
+    // Guardar sesión en BD
+    db.createPlaybackSession({
+        sessionId,
+        studentId:    student.studentId,
+        studentEmail: student.email,
+        courseId:     String(courseId),
+        lessonId:     String(lessonId),
+        deviceId:     fp,
+        ttlSeconds:   PLAYBACK_SESSION_TTL,
+    });
+
+    // Token de sesión de corta vida (15 min) para autenticar eventos
+    const sessionToken = jwt.sign(
+        {
+            sub:          student.id,
+            sessionId,
+            studentId:    student.studentId,
+            studentEmail: student.email,
+            courseId:     String(courseId),
+            lessonId:     String(lessonId),
+            deviceId:     fp,
+            scope:        'playback',
+        },
+        JWT_SECRET,
+        { expiresIn: `${PLAYBACK_SESSION_TTL}s`, issuer: 'reproductor-cursos' }
+    );
+
+    res.json({
+        sessionId,
+        studentId:    student.studentId,
+        studentEmail: student.email,
+        courseId:     String(courseId),
+        lessonId:     String(lessonId),
+        deviceId:     fp,
+        sessionToken,
+        expiresIn:    PLAYBACK_SESSION_TTL,
+        timestamp:    now,
+    });
+});
+
+/**
+ * POST /api/playback/event
+ * Recibe eventos del reproductor externo.
+ * Requiere Authorization: Bearer <sessionToken> emitido por /api/playback/session
+ */
+app.post('/api/playback/event', (req, res) => {
+    // Verificar token de sesión
+    const authHeader = req.headers['authorization'] || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    if (!token) return res.status(401).json({ error: 'Token de sesión requerido' });
+
+    let payload;
+    try {
+        payload = jwt.verify(token, JWT_SECRET, { issuer: 'reproductor-cursos' });
+    } catch {
+        return res.status(401).json({ error: 'Token de sesión inválido o expirado' });
+    }
+
+    if (payload.scope !== 'playback') {
+        return res.status(403).json({ error: 'Token no autorizado para este endpoint' });
+    }
+
+    const { eventType, timestamp, extra } = req.body || {};
+
+    if (!eventType || !ALLOWED_EVENT_TYPES.has(eventType)) {
+        return res.status(400).json({
+            error: `eventType inválido. Permitidos: ${[...ALLOWED_EVENT_TYPES].join(', ')}`,
+        });
+    }
+
+    const ip = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown').split(',')[0].trim();
+    const userAgent = (req.headers['user-agent'] || 'unknown').slice(0, 200);
+
+    db.logPlaybackEvent({
+        sessionId:    payload.sessionId,
+        studentId:    payload.studentId,
+        lessonId:     payload.lessonId,
+        deviceId:     payload.deviceId,
+        ip,
+        userAgent,
+        eventType,
+        extra:        extra || null,
+    });
+
+    res.json({ ok: true, sessionId: payload.sessionId, eventType, timestamp: timestamp || new Date().toISOString() });
+});
+
 // Catch-all 404
 app.use((req, res) => res.status(404).json({ error: 'No encontrado' }));
 
@@ -1922,7 +2063,10 @@ app.use((req, res) => res.status(404).json({ error: 'No encontrado' }));
 // ================================================================
 
 // Limpiar sesiones expiradas cada 60 segundos
-setInterval(() => db.cleanExpiredSessions(), 60_000);
+setInterval(() => {
+    db.cleanExpiredSessions();
+    db.cleanExpiredPlaybackSessions();
+}, 60_000);
 
 app.listen(PORT, () => {
     console.log('');
