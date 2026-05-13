@@ -544,7 +544,8 @@ app.get('/api/video/:videoId/play', requireAuth, async (req, res) => {
     }
 
     try {
-        const manifestUrl = `/api/r/${videoId}`;
+        const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
+        const manifestUrl = `${baseUrl}/api/r/${videoId}`;
 
         // Fingerprint forense único para esta sesión (para el audit log)
         const fingerprint = generateFingerprint(req.user.sub, videoId);

@@ -178,7 +178,7 @@ const STATE = {
     deviceId: null, sessionId: null, hls: null
 };
 
-const API_BASE = window.location.origin;
+const API_BASE = 'https://campus-digital-pro.onrender.com';
 const $  = id => document.getElementById(id);
 const setStatus     = t => $('status-text').textContent = t;
 const showLoading   = m => { $('loading-msg').textContent = m || 'Cargando...'; $('loading-overlay').classList.remove('hidden'); };
