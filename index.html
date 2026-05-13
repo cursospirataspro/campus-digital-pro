@@ -609,7 +609,7 @@ window.addEventListener('pagehide', () => { if (STATE.sessionId) sendEnd(STATE.s
     async function b44Track(eventType, extraObj) {
         if (!STATE.token) return;
         try {
-            const r = await fetch(API_BASE + '/api/b44/track', {
+            await fetch(API_BASE + '/api/b44/track', {
                 method:  'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + STATE.token },
                 body:    JSON.stringify({
@@ -619,10 +619,20 @@ window.addEventListener('pagehide', () => { if (STATE.sessionId) sendEnd(STATE.s
                     extra:    extraObj || null,
                 }),
             });
-            if (r.ok) {
-                b44SetStatus(true, 'LIVE BASE44');
-                B44.retryDelay = 5000;
-                clearTimeout(B44.retryTimer);
+        } catch {}
+        // El estado del botón lo decide /api/b44/status (¿Base44 llamó recientemente?)
+        try {
+            const s = await fetch(API_BASE + '/api/b44/status');
+            if (s.ok) {
+                const d = await s.json();
+                if (d.connected) {
+                    b44SetStatus(true, 'LIVE BASE44');
+                    B44.retryDelay = 5000;
+                    clearTimeout(B44.retryTimer);
+                } else {
+                    b44SetStatus(false, 'BASE44...');
+                    b44scheduleRetry();
+                }
             } else {
                 b44SetStatus(false);
                 b44scheduleRetry();
@@ -644,10 +654,17 @@ window.addEventListener('pagehide', () => { if (STATE.sessionId) sendEnd(STATE.s
         clearTimeout(B44.retryTimer);
         B44.retryTimer = setTimeout(async () => {
             try {
-                const r = await fetch(API_BASE + '/api/b44/ping');
+                const r = await fetch(API_BASE + '/api/b44/status');
                 if (r.ok) {
-                    b44SetStatus(true, 'LIVE BASE44');
-                    B44.retryDelay = 5000;
+                    const d = await r.json();
+                    if (d.connected) {
+                        b44SetStatus(true, 'LIVE BASE44');
+                        B44.retryDelay = 5000;
+                    } else {
+                        b44SetStatus(false, 'BASE44...');
+                        B44.retryDelay = Math.min(B44.retryDelay * 2, 60000);
+                        b44scheduleRetry();
+                    }
                 } else {
                     B44.retryDelay = Math.min(B44.retryDelay * 2, 60000);
                     b44scheduleRetry();

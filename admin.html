@@ -2101,9 +2101,12 @@ function copyText(text) {
 
     async function ping() {
         try {
-            const r = await fetch('/api/b44/ping');
-            if (r.ok) { setOn(); retryDelay = 5000; }
-            else       { setOff(); scheduleRetry(); }
+            const r = await fetch('/api/b44/status');
+            if (r.ok) {
+                const d = await r.json();
+                if (d.connected) { setOn(); retryDelay = 5000; }
+                else             { setOff(); scheduleRetry(); }
+            } else { setOff(); scheduleRetry(); }
         } catch { setOff(); scheduleRetry(); }
     }
 
@@ -2120,13 +2123,14 @@ function copyText(text) {
     async function heartbeat() {
         if (!TOKEN) return;
         try {
-            const r = await fetch('/api/b44/track', {
+            await fetch('/api/b44/track', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN },
                 body: JSON.stringify({ eventType: 'heartbeat', videoId: 'admin-panel', deviceId: 'admin' }),
             });
-            if (r.ok) setOn(); else { setOff(); scheduleRetry(); }
-        } catch { setOff(); scheduleRetry(); }
+        } catch {}
+        // El estado real lo decide /api/b44/status
+        await ping();
     }
 
     // Arrancar: ping inmediato, luego heartbeat cada 20s

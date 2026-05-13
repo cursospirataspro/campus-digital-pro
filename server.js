@@ -2071,12 +2071,17 @@ const MONITOR_KEY = crypto
 // Log al arrancar para que el admin pueda copiarla
 console.log(`[monitor] API key: ${MONITOR_KEY}`);
 
+// Timestamp del último acceso exitoso a cualquier endpoint /api/monitor/*
+// Se usa para que el botón LIVE sepa si Base44 está conectada activamente
+let _lastMonitorAccessAt = 0; // epoch ms
+
 function requireMonitorKey(req, res, next) {
     const auth = req.headers['authorization'] || '';
     const key  = auth.startsWith('Bearer ') ? auth.slice(7) : (req.query.key || '');
     if (!key || key !== MONITOR_KEY) {
         return res.status(401).json({ error: 'Monitor key inválida' });
     }
+    _lastMonitorAccessAt = Date.now(); // registrar que Base44 acaba de conectar
     next();
 }
 
@@ -2284,6 +2289,22 @@ const B44_ALLOWED_EVENTS = new Set([
  */
 app.get('/api/b44/ping', (_req, res) => {
     res.json({ ok: true, ts: Date.now(), service: 'campus-digital-pro' });
+});
+
+/**
+ * GET /api/b44/status
+ * Sin autenticación. El botón LIVE del reproductor y del admin llama esto.
+ * Devuelve connected:true solo si Base44 llamó la Monitor API en los últimos 2 minutos.
+ */
+app.get('/api/b44/status', (_req, res) => {
+    const STALE_MS  = 2 * 60 * 1000; // 2 minutos
+    const elapsed   = _lastMonitorAccessAt ? Date.now() - _lastMonitorAccessAt : Infinity;
+    const connected = elapsed <= STALE_MS;
+    res.json({
+        connected,
+        lastPullAgo: _lastMonitorAccessAt ? Math.floor(elapsed / 1000) : null,
+        ts: Date.now(),
+    });
 });
 
 /**
