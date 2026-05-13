@@ -2062,6 +2062,77 @@ function copyText(text) {
         clearToken();
     }
 })();
+
+// ================================================================
+//  BASE44 LIVE — Indicador de conexión perpetua (esquina superior derecha)
+// ================================================================
+(function () {
+    // Estilos
+    const s = document.createElement('style');
+    s.textContent = `
+        #b44-live-admin {
+            position: fixed; top: 14px; right: 18px; z-index: 9999;
+            background: rgba(10,10,10,0.92); border: 1.5px solid rgba(255,255,255,0.1);
+            border-radius: 20px; padding: 5px 14px; font-size: 0.7rem;
+            font-family: 'Segoe UI', sans-serif; color: #555;
+            display: flex; align-items: center; gap: 6px;
+            backdrop-filter: blur(8px); box-shadow: 0 2px 12px rgba(0,0,0,0.6);
+            transition: border-color 0.5s, color 0.5s; pointer-events: none;
+            user-select: none;
+        }
+        #b44-live-admin .dot { font-size: 0.56rem; transition: color 0.5s; }
+        #b44-live-admin.on  { border-color: rgba(46,204,113,0.45); color: #ccc; }
+        #b44-live-admin.on  .dot { color: #2ecc71; animation: b44pulse 2.2s ease-in-out infinite; }
+        #b44-live-admin.off .dot { color: #e74c3c; }
+        @keyframes b44pulse { 0%,100%{opacity:1} 50%{opacity:0.15} }
+    `;
+    document.head.appendChild(s);
+
+    // Botón
+    const btn = document.createElement('div');
+    btn.id = 'b44-live-admin';
+    btn.innerHTML = '<span class="dot">●</span><span class="lbl">BASE44</span>';
+    document.body.appendChild(btn);
+
+    const setOn  = () => { btn.className = 'on';  btn.querySelector('.lbl').textContent = 'LIVE BASE44'; };
+    const setOff = () => { btn.className = 'off'; btn.querySelector('.lbl').textContent = 'BASE44...';   };
+
+    let retryDelay = 5000;
+
+    async function ping() {
+        try {
+            const r = await fetch('/api/b44/ping');
+            if (r.ok) { setOn(); retryDelay = 5000; }
+            else       { setOff(); scheduleRetry(); }
+        } catch { setOff(); scheduleRetry(); }
+    }
+
+    function scheduleRetry() {
+        setTimeout(async () => {
+            await ping();
+            if (btn.className !== 'on') {
+                retryDelay = Math.min(retryDelay * 2, 60000);
+                scheduleRetry();
+            }
+        }, retryDelay);
+    }
+
+    async function heartbeat() {
+        if (!TOKEN) return;
+        try {
+            const r = await fetch('/api/b44/track', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN },
+                body: JSON.stringify({ eventType: 'heartbeat', videoId: 'admin-panel', deviceId: 'admin' }),
+            });
+            if (r.ok) setOn(); else { setOff(); scheduleRetry(); }
+        } catch { setOff(); scheduleRetry(); }
+    }
+
+    // Arrancar: ping inmediato, luego heartbeat cada 20s
+    ping();
+    setInterval(heartbeat, 20000);
+})();
 </script>
 </body>
 </html>
