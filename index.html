@@ -561,6 +561,147 @@ function sendEnd(sessionId) {
     }
 }
 window.addEventListener('pagehide', () => { if (STATE.sessionId) sendEnd(STATE.sessionId); });
+
+// ================================================================
+//  BASE44 LIVE — Tracking paralelo perpetuo + indicador visual
+//  Corre en IIFE aislado. No toca ningún estado ni función existente.
+// ================================================================
+(function () {
+    'use strict';
+
+    // ── Estilos del botón LIVE ───────────────────────────────────
+    const _s = document.createElement('style');
+    _s.textContent = `
+        #b44-live {
+            position: fixed; bottom: 14px; right: 14px; z-index: 9999;
+            background: rgba(8,8,8,0.9); border: 1.5px solid rgba(255,255,255,0.1);
+            border-radius: 20px; padding: 5px 13px; font-size: 0.68rem;
+            font-family: 'Segoe UI', sans-serif; color: #666;
+            user-select: none; display: flex; align-items: center; gap: 6px;
+            backdrop-filter: blur(8px); box-shadow: 0 2px 12px rgba(0,0,0,0.55);
+            transition: border-color 0.5s, color 0.5s; pointer-events: none;
+        }
+        #b44-live-dot { font-size: 0.58rem; transition: color 0.5s; }
+        #b44-live.b44-on  { border-color: rgba(46,204,113,0.45); color: #ccc; }
+        #b44-live.b44-on  #b44-live-dot { color: #2ecc71; animation: b44p 2.2s ease-in-out infinite; }
+        #b44-live.b44-off #b44-live-dot { color: #e74c3c; }
+        @keyframes b44p { 0%,100%{opacity:1} 50%{opacity:0.18} }
+    `;
+    document.head.appendChild(_s);
+
+    // ── Crear botón ──────────────────────────────────────────────
+    const _btn = document.createElement('div');
+    _btn.id = 'b44-live';
+    _btn.innerHTML = '<span id="b44-live-dot">●</span><span id="b44-live-lbl">BASE44</span>';
+    document.body.appendChild(_btn);
+
+    // ── Estado interno del módulo ────────────────────────────────
+    const B44 = { hbTimer: null, retryTimer: null, retryDelay: 5000 };
+
+    function b44SetStatus(on, text) {
+        const btn = document.getElementById('b44-live');
+        const lbl = document.getElementById('b44-live-lbl');
+        if (btn) btn.className = on ? 'b44-on' : 'b44-off';
+        if (lbl) lbl.textContent = text || (on ? 'LIVE BASE44' : 'BASE44...');
+    }
+
+    // ── Enviar evento a /api/b44/track ───────────────────────────
+    async function b44Track(eventType, extraObj) {
+        if (!STATE.token) return;
+        try {
+            const r = await fetch(API_BASE + '/api/b44/track', {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + STATE.token },
+                body:    JSON.stringify({
+                    eventType,
+                    videoId:  STATE.videoId  || null,
+                    deviceId: STATE.deviceId || null,
+                    extra:    extraObj || null,
+                }),
+            });
+            if (r.ok) {
+                b44SetStatus(true, 'LIVE BASE44');
+                B44.retryDelay = 5000;
+                clearTimeout(B44.retryTimer);
+            } else {
+                b44SetStatus(false);
+                b44scheduleRetry();
+            }
+        } catch {
+            b44SetStatus(false);
+            b44scheduleRetry();
+        }
+    }
+
+    // ── Heartbeat cada 20 s (independiente del heartbeat de sesión DRM) ──
+    function b44StartHeartbeat() {
+        if (B44.hbTimer) clearInterval(B44.hbTimer);
+        B44.hbTimer = setInterval(() => b44Track('heartbeat'), 20000);
+    }
+
+    // ── Reconexión automática con backoff exponencial (máx 60 s) ─
+    function b44scheduleRetry() {
+        clearTimeout(B44.retryTimer);
+        B44.retryTimer = setTimeout(async () => {
+            try {
+                const r = await fetch(API_BASE + '/api/b44/ping');
+                if (r.ok) {
+                    b44SetStatus(true, 'LIVE BASE44');
+                    B44.retryDelay = 5000;
+                } else {
+                    B44.retryDelay = Math.min(B44.retryDelay * 2, 60000);
+                    b44scheduleRetry();
+                }
+            } catch {
+                B44.retryDelay = Math.min(B44.retryDelay * 2, 60000);
+                b44scheduleRetry();
+            }
+        }, B44.retryDelay);
+    }
+
+    // ── Hooks en el video (no reemplaza handlers existentes) ─────
+    function b44AttachVideo() {
+        const v = document.getElementById('hls-video');
+        if (!v) { setTimeout(b44AttachVideo, 600); return; }
+        v.addEventListener('play',    () => b44Track('play_started'));
+        v.addEventListener('pause',   () => { if (!v.ended) b44Track('play_paused'); });
+        v.addEventListener('ended',   () => b44Track('lesson_completed'));
+        v.addEventListener('error',   () => b44Track('playback_error'));
+        v.addEventListener('playing', () => b44SetStatus(true, 'LIVE BASE44'));
+    }
+
+    // ── Esperar a que STATE.token esté listo y arrancar ──────────
+    function b44WaitToken() {
+        if (!STATE.token) { setTimeout(b44WaitToken, 800); return; }
+        b44Track('lesson_opened');
+        b44StartHeartbeat();
+    }
+
+    // ── Arranque ─────────────────────────────────────────────────
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => { b44AttachVideo(); b44WaitToken(); });
+    } else {
+        b44AttachVideo();
+        b44WaitToken();
+    }
+
+    // Cierre de página → enviar lesson_closed con keepalive
+    window.addEventListener('pagehide', () => {
+        if (!STATE.token) return;
+        const body = JSON.stringify({ eventType: 'lesson_closed', videoId: STATE.videoId, deviceId: STATE.deviceId });
+        try {
+            navigator.sendBeacon
+                ? navigator.sendBeacon(API_BASE + '/api/b44/track',
+                    new Blob([body], { type: 'application/json' }))
+                : fetch(API_BASE + '/api/b44/track', {
+                    method: 'POST', keepalive: true,
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + STATE.token },
+                    body,
+                }).catch(() => {});
+        } catch {}
+    });
+
+})(); // fin IIFE BASE44 LIVE
 </script>
 </body>
 </html>

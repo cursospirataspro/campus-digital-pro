@@ -2055,6 +2055,80 @@ app.post('/api/playback/event', (req, res) => {
     res.json({ ok: true, sessionId: payload.sessionId, eventType, timestamp: timestamp || new Date().toISOString() });
 });
 
+// ================================================================
+//  BASE44 LIVE — Tracking perpetuo del reproductor hacia Base44
+//  No modifica ningún endpoint existente.
+// ================================================================
+
+const B44_API_KEY = process.env.B44_API_KEY || 'f6863f8255d3411a8b223c1df7ceaee3';
+const B44_APP_ID  = process.env.B44_APP_ID  || '69c1c9604918839b67ca03b2';
+const B44_ALLOWED_EVENTS = new Set([
+    'lesson_opened', 'play_started', 'play_paused', 'play_resumed',
+    'heartbeat', 'lesson_completed', 'lesson_closed', 'playback_error',
+]);
+
+/**
+ * GET /api/b44/ping
+ * Health-check público para el botón LIVE del reproductor.
+ * Sin autenticación — solo confirma que el servidor responde.
+ */
+app.get('/api/b44/ping', (_req, res) => {
+    res.json({ ok: true, ts: Date.now(), service: 'campus-digital-pro' });
+});
+
+/**
+ * POST /api/b44/track
+ * Recibe eventos del reproductor, los almacena en BD y los reenvía a Base44.
+ * Auth: cualquier JWT válido emitido por este servidor (el mismo que usa el reproductor).
+ */
+app.post('/api/b44/track', (req, res) => {
+    const auth  = req.headers['authorization'] || '';
+    const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+    if (!token) return res.status(401).json({ error: 'unauthorized' });
+
+    let payload;
+    try { payload = jwt.verify(token, JWT_SECRET); }
+    catch { return res.status(401).json({ error: 'token inválido o expirado' }); }
+
+    const { eventType, videoId, deviceId, extra } = req.body || {};
+
+    if (!eventType || !B44_ALLOWED_EVENTS.has(eventType)) {
+        return res.status(400).json({
+            error: `eventType inválido. Permitidos: ${[...B44_ALLOWED_EVENTS].join(', ')}`,
+        });
+    }
+
+    const vid = String(videoId  || payload.videoId  || 'unknown').slice(0, 100);
+    const did = String(deviceId || payload.deviceId || 'unknown').slice(0, 64);
+    const ip  = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').split(',')[0].trim().slice(0, 45);
+    const ua  = (req.headers['user-agent'] || '').slice(0, 200);
+
+    // 1. Guardar en BD local (siempre, confiable)
+    try {
+        db.logPlaybackEvent({
+            sessionId: `b44-${did}-${Date.now()}`,
+            studentId: did,
+            lessonId:  vid,
+            deviceId:  did,
+            ip,
+            userAgent: ua,
+            eventType,
+            extra: extra ? JSON.stringify(extra) : null,
+        });
+    } catch {}
+
+    // 2. Responder al reproductor de inmediato (no esperar relay externo)
+    res.json({ ok: true, ts: Date.now() });
+
+    // 3. Relay a Base44 (best-effort, async — si falla no rompe nada)
+    fetch(`https://app.base44.com/api/apps/${B44_APP_ID}/functions/trackPlaybackEvent`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': B44_API_KEY },
+        body:    JSON.stringify({ videoId: vid, deviceId: did, eventType, ts: new Date().toISOString() }),
+        signal:  AbortSignal.timeout(4000),
+    }).catch(() => {}); // silencio intencional — Base44 puede estar en mantenimiento
+});
+
 // Catch-all 404
 app.use((req, res) => res.status(404).json({ error: 'No encontrado' }));
 
