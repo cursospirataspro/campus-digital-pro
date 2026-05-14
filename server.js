@@ -1814,12 +1814,12 @@ app.get('/api/b/:videoId/:segname', (req, res) => {
  * Si el JWT expiró o la sesión no existe → { revoked: true } → cliente pausa el video.
  */
 app.post('/api/session/heartbeat', (req, res) => {
-    const { sessionId, mediaToken } = req.body || {};
+    const { sessionId, mediaToken, currentTime } = req.body || {};
     if (!sessionId || !mediaToken) return res.status(400).json({ error: 'sessionId y mediaToken requeridos' });
     try { jwt.verify(mediaToken, JWT_SECRET); } catch {
         return res.status(401).json({ revoked: true, reason: 'token_expired' });
     }
-    const updated = db.heartbeatSession(sessionId);
+    const updated = db.heartbeatSession(sessionId, currentTime);
     if (!updated) return res.status(404).json({ revoked: true, reason: 'session_not_found' });
     res.json({ ok: true });
 });
@@ -2254,6 +2254,19 @@ app.get('/api/monitor/activity', requireMonitorKey, (req, res) => {
     for (const v of catalog) vidMap[v.videoId] = v;
     for (const c of courses) courseMap[c.id]   = c;
 
+    // Mapa de última posición conocida por usuario+video (sesiones activas)
+    const currentTimeMap = {};
+    for (const e of result.entries) {
+        if (!currentTimeMap[e.userId]) {
+            try {
+                const sessions = db.getActiveSessionsByUser(e.userId);
+                for (const s of sessions) {
+                    currentTimeMap[`${s.user_id}:${s.video_id}`] = s.current_time || 0;
+                }
+            } catch {}
+        }
+    }
+
     res.json({
         ts:    new Date().toISOString(),
         total: result.total,
@@ -2271,6 +2284,7 @@ app.get('/api/monitor/activity', requireMonitorKey, (req, res) => {
                 playerUrl:    `https://campus-digital-pro.onrender.com/?v=${e.videoId}`,
                 deviceId:     e.deviceId,
                 ip:           e.ip,
+                currentTime:  currentTimeMap[`${e.userId}:${e.videoId}`] ?? null,
                 at:           e.deliveredAt,
             };
         }),

@@ -542,10 +542,16 @@ function startHeartbeat() {
     heartbeatTimer = setInterval(async () => {
         if (!STATE.sessionId || !STATE.mediaToken) return;
         try {
+            const _vid = document.getElementById('hls-video');
             const r = await fetch(API_BASE + '/api/session/heartbeat', {
                 method:  'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body:    JSON.stringify({ sessionId: STATE.sessionId, mediaToken: STATE.mediaToken })
+                body:    JSON.stringify({
+                    sessionId:   STATE.sessionId,
+                    mediaToken:  STATE.mediaToken,
+                    currentTime: Math.floor(_vid?.currentTime || 0),
+                    duration:    Math.floor(_vid?.duration    || 0)
+                })
             });
             const d = await r.json().catch(() => ({}));
             if (!r.ok || d.revoked) {

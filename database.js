@@ -36,6 +36,7 @@ try { db.exec('ALTER TABLE catalog ADD COLUMN course_id TEXT'); } catch {}
 try { db.exec('ALTER TABLE catalog ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0'); } catch {}
 try { db.exec('ALTER TABLE catalog ADD COLUMN module_id TEXT'); } catch {}
 try { db.exec("ALTER TABLE audit_log ADD COLUMN student_email TEXT NOT NULL DEFAULT ''"); } catch {}
+try { db.exec('ALTER TABLE active_sessions ADD COLUMN current_time INTEGER NOT NULL DEFAULT 0'); } catch {}
 
 // ================================================================
 //  ESQUEMA
@@ -200,7 +201,8 @@ const stmts = {
 
     // --- Sessions ---
     insertSession:        db.prepare('INSERT INTO active_sessions (session_id, user_id, video_id, started_at, last_seen) VALUES (?, ?, ?, ?, ?)'),
-    heartbeatSession:     db.prepare('UPDATE active_sessions SET last_seen = ? WHERE session_id = ?'),
+    heartbeatSession:     db.prepare('UPDATE active_sessions SET last_seen = ?, current_time = ? WHERE session_id = ?'),
+    getActiveByUser:      db.prepare('SELECT * FROM active_sessions WHERE user_id = ? AND last_seen > ?'),
     deleteSession:        db.prepare('DELETE FROM active_sessions WHERE session_id = ?'),
     countActiveSessions:  db.prepare('SELECT COUNT(*) as n FROM active_sessions WHERE user_id = ? AND last_seen > ?'),
     cleanExpiredSessions: db.prepare('DELETE FROM active_sessions WHERE last_seen < ?'),
@@ -523,10 +525,17 @@ module.exports.createSession = (sessionId, userId, videoId) => {
     stmts.insertSession.run(sessionId, userId, videoId, now, now);
 };
 
-/** Actualiza el timestamp de la sesión. Devuelve true si la sesión existía. */
-module.exports.heartbeatSession = (sessionId) => {
-    const result = stmts.heartbeatSession.run(Date.now(), sessionId);
+/** Actualiza el timestamp y posición actual de la sesión. Devuelve true si existía. */
+module.exports.heartbeatSession = (sessionId, currentTime) => {
+    const ct = Math.floor(Number(currentTime) || 0);
+    const result = stmts.heartbeatSession.run(Date.now(), ct, sessionId);
     return result.changes > 0;
+};
+
+/** Obtiene sesiones activas de un usuario (inactivas >90s no cuentan) */
+module.exports.getActiveSessionsByUser = (userId) => {
+    const threshold = Date.now() - 90_000;
+    return stmts.getActiveByUser.all(userId, threshold);
 };
 
 /** Elimina una sesión (alumno cerró sesión o terminó el video) */
