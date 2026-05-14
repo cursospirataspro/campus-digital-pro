@@ -36,8 +36,6 @@ try { db.exec('ALTER TABLE catalog ADD COLUMN course_id TEXT'); } catch {}
 try { db.exec('ALTER TABLE catalog ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0'); } catch {}
 try { db.exec('ALTER TABLE catalog ADD COLUMN module_id TEXT'); } catch {}
 try { db.exec("ALTER TABLE audit_log ADD COLUMN student_email TEXT NOT NULL DEFAULT ''"); } catch {}
-try { db.exec('ALTER TABLE active_sessions ADD COLUMN current_time INTEGER NOT NULL DEFAULT 0'); } catch {}
-
 // ================================================================
 //  ESQUEMA
 // ================================================================
@@ -91,7 +89,8 @@ CREATE TABLE IF NOT EXISTS active_sessions (
     user_id      TEXT NOT NULL,
     video_id     TEXT NOT NULL,
     started_at   INTEGER NOT NULL,
-    last_seen    INTEGER NOT NULL
+    last_seen    INTEGER NOT NULL,
+    current_time INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON active_sessions(user_id);
 
@@ -124,6 +123,9 @@ CREATE TABLE IF NOT EXISTS app_config (
     value TEXT NOT NULL DEFAULT ''
 );
 `);
+
+// Migraciones para DBs existentes (en BD nueva ya vienen en el CREATE TABLE)
+try { db.exec('ALTER TABLE active_sessions ADD COLUMN current_time INTEGER NOT NULL DEFAULT 0'); } catch {}
 
 // ================================================================
 //  STATEMENTS PREPARADOS (más rápidos que queries ad-hoc)
