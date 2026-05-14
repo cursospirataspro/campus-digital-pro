@@ -241,6 +241,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     // 1. Generar ID de dispositivo
     // Si Base44 pasó su deviceId por URL (?did=), usarlo directamente para vincular alumno↔device
     const externalDid = params.get('did');
+    const externalUid = params.get('uid') || ''; // email del alumno enviado por Base44
     if (externalDid && /^[a-zA-Z0-9_-]{4,64}$/.test(externalDid)) {
         STATE.deviceId = externalDid;
     } else {
@@ -270,7 +271,9 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (!STATE.token) {
         showLoading('Preparando reproducción...');
         try {
-            const r = await fetch(API_BASE + '/api/auth/auto?did=' + encodeURIComponent(STATE.deviceId));
+            let autoUrl = API_BASE + '/api/auth/auto?did=' + encodeURIComponent(STATE.deviceId);
+            if (externalUid) autoUrl += '&uid=' + encodeURIComponent(externalUid);
+            const r = await fetch(autoUrl);
             if (!r.ok) throw new Error('HTTP ' + r.status);
             const { token } = await r.json();
             STATE.token = token;

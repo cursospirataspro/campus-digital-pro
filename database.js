@@ -35,6 +35,7 @@ try { db.exec('ALTER TABLE catalog ADD COLUMN bunny_url TEXT'); } catch {}
 try { db.exec('ALTER TABLE catalog ADD COLUMN course_id TEXT'); } catch {}
 try { db.exec('ALTER TABLE catalog ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0'); } catch {}
 try { db.exec('ALTER TABLE catalog ADD COLUMN module_id TEXT'); } catch {}
+try { db.exec("ALTER TABLE audit_log ADD COLUMN student_email TEXT NOT NULL DEFAULT ''"); } catch {}
 
 // ================================================================
 //  ESQUEMA
@@ -55,14 +56,15 @@ CREATE TABLE IF NOT EXISTS students (
 CREATE INDEX IF NOT EXISTS idx_students_email ON students(email);
 
 CREATE TABLE IF NOT EXISTS audit_log (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    fingerprint  TEXT NOT NULL,
-    user_id      TEXT NOT NULL,
-    video_id     TEXT NOT NULL,
-    device_id    TEXT NOT NULL DEFAULT 'desconocido',
-    ip           TEXT NOT NULL DEFAULT 'desconocida',
-    user_agent   TEXT NOT NULL DEFAULT 'desconocido',
-    delivered_at TEXT NOT NULL
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    fingerprint   TEXT NOT NULL,
+    user_id       TEXT NOT NULL,
+    video_id      TEXT NOT NULL,
+    device_id     TEXT NOT NULL DEFAULT 'desconocido',
+    student_email TEXT NOT NULL DEFAULT '',
+    ip            TEXT NOT NULL DEFAULT 'desconocida',
+    user_agent    TEXT NOT NULL DEFAULT 'desconocido',
+    delivered_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_audit_user    ON audit_log(user_id);
 CREATE INDEX IF NOT EXISTS idx_audit_video   ON audit_log(video_id);
@@ -144,8 +146,8 @@ const stmts = {
 
     // --- Audit log ---
     insertAudit:          db.prepare(`
-        INSERT INTO audit_log (fingerprint, user_id, video_id, device_id, ip, user_agent, delivered_at)
-        VALUES (@fingerprint, @user_id, @video_id, @device_id, @ip, @user_agent, @delivered_at)
+        INSERT INTO audit_log (fingerprint, user_id, video_id, device_id, student_email, ip, user_agent, delivered_at)
+        VALUES (@fingerprint, @user_id, @video_id, @device_id, @student_email, @ip, @user_agent, @delivered_at)
     `),
     getAuditByFp:         db.prepare('SELECT * FROM audit_log WHERE fingerprint = ? LIMIT 1'),
     getAuditAll:          db.prepare('SELECT * FROM audit_log ORDER BY delivered_at DESC LIMIT ?'),
@@ -307,12 +309,13 @@ module.exports.importStudents = (list) => {
 //  API — AUDIT LOG
 // ================================================================
 
-module.exports.logDelivery = ({ fingerprint, userId, videoId, deviceId, ip, userAgent }) => {
+module.exports.logDelivery = ({ fingerprint, userId, videoId, deviceId, studentEmail, ip, userAgent }) => {
     stmts.insertAudit.run({
         fingerprint,
         user_id: userId,
         video_id: videoId,
         device_id: deviceId || 'desconocido',
+        student_email: studentEmail || '',
         ip: ip || 'desconocida',
         user_agent: userAgent || 'desconocido',
         delivered_at: new Date().toISOString(),
@@ -350,13 +353,14 @@ module.exports.getAuditLog = ({ userId, videoId, limit = 500 } = {}) => {
     }
     return {
         entries: rows.map(r => ({
-            fingerprint: r.fingerprint,
-            userId:      r.user_id,
-            videoId:     r.video_id,
-            deviceId:    r.device_id,
-            ip:          r.ip,
-            userAgent:   r.user_agent,
-            deliveredAt: r.delivered_at,
+            fingerprint:  r.fingerprint,
+            userId:       r.user_id,
+            videoId:      r.video_id,
+            deviceId:     r.device_id,
+            studentEmail: r.student_email || '',
+            ip:           r.ip,
+            userAgent:    r.user_agent,
+            deliveredAt:  r.delivered_at,
         })),
         total: count,
     };

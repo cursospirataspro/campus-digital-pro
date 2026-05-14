@@ -478,12 +478,16 @@ app.get('/api/auth/auto', (req, res) => {
     // Sanitizar deviceId: solo hex/alfanumérico, max 64 chars
     const rawDid = (req.query.did || '').slice(0, 64).replace(/[^a-zA-Z0-9]/g, '');
     const deviceId = rawDid || 'anon-' + sessionId.slice(0, 8);
+    // Sanitizar studentEmail: formato básico de email, max 254 chars
+    const rawUid = (req.query.uid || '').slice(0, 254).trim();
+    const studentEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawUid) ? rawUid : '';
     const token = jwt.sign(
         {
             sub:           sessionId,
-            email:         'guest',
+            email:         studentEmail || 'guest',
             label:         deviceId,
             deviceId,
+            studentEmail,
             allowedVideos: ['*'],
             admin:         false,
         },
@@ -572,6 +576,7 @@ app.get('/api/video/:videoId/play', requireAuth, async (req, res) => {
             videoId,
             fingerprint,
             deviceId: req.user.deviceId || 'unknown',
+            studentEmail: req.user.studentEmail || '',
             ip: req.ip,
             userAgent: req.headers['user-agent'],
         });
@@ -2257,15 +2262,16 @@ app.get('/api/monitor/activity', requireMonitorKey, (req, res) => {
             const vid    = vidMap[e.videoId];
             const course = vid?.courseId ? courseMap[vid.courseId] : null;
             return {
-                studentId:   e.userId,
-                videoId:     e.videoId,
-                videoTitle:  vid?.title   || e.videoId,
-                courseName:  course?.name || 'Sin curso',
-                eventType:   e.eventType  || 'delivery',
-                playerUrl:   `https://campus-digital-pro.onrender.com/?v=${e.videoId}`,
-                deviceId:    e.deviceId,
-                ip:          e.ip,
-                at:          e.deliveredAt,
+                studentId:    e.userId,
+                studentEmail: e.studentEmail || null,
+                videoId:      e.videoId,
+                videoTitle:   vid?.title   || e.videoId,
+                courseName:   course?.name || 'Sin curso',
+                eventType:    e.eventType  || 'delivery',
+                playerUrl:    `https://campus-digital-pro.onrender.com/?v=${e.videoId}`,
+                deviceId:     e.deviceId,
+                ip:           e.ip,
+                at:           e.deliveredAt,
             };
         }),
     });
