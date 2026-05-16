@@ -2524,7 +2524,7 @@ app.post('/api/b44/track', (req, res) => {
     res.json({ ok: true, ts: Date.now() });
 
     // 3. Relay a Base44 (best-effort, async — si falla no rompe nada)
-    fetch(`https://app.base44.com/api/apps/${B44_APP_ID}/functions/trackPlaybackEvent`, {
+    fetch(`https://${B44_APP_ID}.base44.app/api/Functions/trackPlaybackEvent`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json', 'x-api-key': B44_API_KEY },
         body:    JSON.stringify({ videoId: vid, deviceId: did, eventType, ts: new Date().toISOString() }),
