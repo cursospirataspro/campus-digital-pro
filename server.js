@@ -2627,3 +2627,91 @@ app.get('/api/monitor/metrics', requireMonitorKey, (_req, res) => {
         apiError(res, 500, 'INTERNAL_ERROR', 'Error calculando métricas');
     }
 });
+
+// ================================================================
+//  HISTORIAL COMPLETO DE UN ALUMNO — Dashboard modal
+//  GET /api/admin/student-history/:email
+//  Devuelve: info del alumno, videos vistos con tiempo, eventos
+// ================================================================
+app.get('/api/admin/student-history/:email', requireAdmin, (req, res) => {
+    try {
+        const emailParam = decodeURIComponent(req.params.email).trim().toLowerCase();
+        const student    = db.findStudentByEmail(emailParam);
+        if (!student) return apiError(res, 404, 'NOT_FOUND', 'Alumno no encontrado');
+
+        const catalog  = db.loadCatalog();
+        const courses  = db.getAllCourses();
+        const modules  = db.getAllModules ? db.getAllModules() : [];
+
+        const vidMap    = {};
+        const courseMap = {};
+        const modMap    = {};
+        for (const v of catalog) vidMap[v.videoId]   = v;
+        for (const c of courses) courseMap[c.id]      = c;
+        for (const m of modules) modMap[m.id]         = m;
+
+        // Todos los eventos del alumno (audit_log)
+        const auditResult = db.getAuditLog({ userId: student.id, limit: 500 });
+
+        // Sesiones activas / históricas del alumno
+        const sessionsRaw = db.getSessionsByUser ? db.getSessionsByUser(student.id) : [];
+
+        // Mapa de tiempo máximo por video (de sesiones)
+        const timeByVideo = {};
+        for (const s of sessionsRaw) {
+            const cur = timeByVideo[s.video_id] || 0;
+            if ((s.current_time || 0) > cur) timeByVideo[s.video_id] = s.current_time;
+        }
+
+        // Videos vistos (distintos) con metadata
+        const videoIds = [...new Set(auditResult.entries.map(e => e.videoId))];
+        const videos = videoIds.map(vId => {
+            const v       = vidMap[vId];
+            const course  = v?.courseId ? courseMap[v.courseId] : null;
+            const module_ = v?.moduleId ? modMap[v.moduleId]   : null;
+            // Último acceso a este video
+            const entry   = auditResult.entries.find(e => e.videoId === vId);
+            return {
+                videoId:     vId,
+                title:       v?.title     || vId,
+                courseName:  course?.name || 'Sin curso',
+                moduleName:  module_?.name || '—',
+                tiempoSeg:   timeByVideo[vId] || 0,
+                ultimoAcceso: entry?.deliveredAt || null,
+            };
+        }).sort((a, b) => (b.ultimoAcceso || '') > (a.ultimoAcceso || '') ? 1 : -1);
+
+        // Historial de eventos enriquecido
+        const events = auditResult.entries.map(e => {
+            const v      = vidMap[e.videoId];
+            const course = v?.courseId ? courseMap[v.courseId] : null;
+            return {
+                eventType:  e.eventType || 'delivery',
+                videoId:    e.videoId,
+                videoTitle: v?.title    || e.videoId,
+                courseName: course?.name || 'Sin curso',
+                ip:         e.ip        || '—',
+                deviceId:   e.deviceId  || '—',
+                at:         e.deliveredAt,
+            };
+        });
+
+        res.json({
+            ts:       new Date().toISOString(),
+            student:  {
+                email:     student.email,
+                name:      student.name,
+                studentId: student.studentId,
+                active:    student.active,
+                deviceId:  student.deviceId,
+                createdAt: student.createdAt,
+                lastLogin: student.lastLogin,
+            },
+            videos,
+            events,
+        });
+    } catch (err) {
+        console.error('[student-history]', err);
+        apiError(res, 500, 'INTERNAL_ERROR', 'Error obteniendo historial');
+    }
+});

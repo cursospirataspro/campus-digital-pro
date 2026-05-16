@@ -829,6 +829,65 @@
     </main>
 </div>
 
+<!-- ====== MODAL HISTORIAL ALUMNO ====== -->
+<div id="student-modal-bg" onclick="if(event.target===this)closeStudentModal()" style="position:fixed;inset:0;z-index:400;background:rgba(0,0,0,0.75);display:none;align-items:flex-start;justify-content:center;padding:24px 16px;overflow-y:auto">
+    <div id="student-modal" style="background:var(--c-surface);border:1px solid var(--c-border);border-radius:14px;padding:28px;width:100%;max-width:860px;position:relative;margin:auto">
+        <!-- Cabecera -->
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:20px">
+            <div>
+                <h3 id="sm-name" style="font-size:1.15rem;margin-bottom:2px">—</h3>
+                <div id="sm-email" style="color:var(--c-muted);font-size:0.82rem"></div>
+                <div id="sm-meta" style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap"></div>
+            </div>
+            <button onclick="closeStudentModal()" style="background:none;border:1px solid var(--c-border);color:var(--c-muted);border-radius:6px;padding:6px 12px;cursor:pointer;font-size:0.82rem">✕ Cerrar</button>
+        </div>
+
+        <!-- Stats del alumno -->
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px">
+            <div style="background:var(--c-surface2);border:1px solid var(--c-border);border-radius:8px;padding:14px">
+                <div id="sm-stat-videos" style="font-size:1.6rem;font-weight:700;color:var(--c-primary)">—</div>
+                <div style="color:var(--c-muted);font-size:0.75rem;margin-top:2px">Videos vistos</div>
+            </div>
+            <div style="background:var(--c-surface2);border:1px solid var(--c-border);border-radius:8px;padding:14px">
+                <div id="sm-stat-cursos" style="font-size:1.6rem;font-weight:700;color:var(--c-primary)">—</div>
+                <div style="color:var(--c-muted);font-size:0.75rem;margin-top:2px">Cursos activos</div>
+            </div>
+            <div style="background:var(--c-surface2);border:1px solid var(--c-border);border-radius:8px;padding:14px">
+                <div id="sm-stat-tiempo" style="font-size:1.6rem;font-weight:700;color:var(--c-primary)">—</div>
+                <div style="color:var(--c-muted);font-size:0.75rem;margin-top:2px">Tiempo reproducido</div>
+            </div>
+            <div style="background:var(--c-surface2);border:1px solid var(--c-border);border-radius:8px;padding:14px">
+                <div id="sm-stat-ultimo" style="font-size:1rem;font-weight:600;color:var(--c-warn)">—</div>
+                <div style="color:var(--c-muted);font-size:0.75rem;margin-top:2px">Último acceso</div>
+            </div>
+        </div>
+
+        <!-- Cargando / error -->
+        <div id="sm-loading" style="text-align:center;padding:20px;color:var(--c-muted);font-size:0.88rem">Cargando historial...</div>
+
+        <!-- Contenido cargado -->
+        <div id="sm-content" style="display:none">
+            <!-- Videos por curso -->
+            <div style="margin-bottom:6px;font-size:0.75rem;font-weight:700;color:var(--c-muted);text-transform:uppercase;letter-spacing:.05em">Videos vistos por curso</div>
+            <div class="table-wrap" style="margin-bottom:20px">
+                <table>
+                    <thead><tr><th>Título del video</th><th>Curso</th><th>Módulo</th><th>Tiempo visto</th><th>Último acceso</th></tr></thead>
+                    <tbody id="sm-videos-body"></tbody>
+                </table>
+            </div>
+
+            <!-- Historial de eventos -->
+            <div style="margin-bottom:6px;font-size:0.75rem;font-weight:700;color:var(--c-muted);text-transform:uppercase;letter-spacing:.05em">Historial completo de eventos</div>
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th>Evento</th><th>Video</th><th>Curso</th><th>IP</th><th>Dispositivo</th><th>Fecha</th></tr></thead>
+                    <tbody id="sm-events-body"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Modal dominios permitidos -->
 <div id="domains-modal-bg" onclick="if(event.target===this)closeDomainsModal()">
     <div id="domains-modal">
@@ -966,7 +1025,7 @@ function renderMetricsTable(data) {
     tbody.innerHTML = data.map(m => `
         <tr>
             <td>
-                ${m.cursos && m.cursos.length ? `<span class="copy-link" onclick="openDashDetail(${JSON.stringify(m).replace(/"/g, '&quot;')})">${esc(m.name || m.studentId || '—')}</span>` : esc(m.name || m.studentId || '—')}
+                <span class="copy-link" style="cursor:pointer" onclick='openStudentModal(${JSON.stringify(m).replace(/'/g, "&#39;").replace(/\\/g, "\\\\")})'>&#128100; ${esc(m.name || m.studentId || '—')}</span>
             </td>
             <td style="font-size:0.8rem">${esc(m.email)}</td>
             <td><span class="badge ${m.active ? 'badge-ok' : 'badge-error'}">${m.active ? 'Activo' : 'Inactivo'}</span></td>
@@ -1003,6 +1062,90 @@ function openDashDetail(m) {
 
 function closeDashDetail() {
     $('dash-detail-panel').style.display = 'none';
+}
+
+// ================================================================
+//  MODAL HISTORIAL COMPLETO DEL ALUMNO
+// ================================================================
+const SM_EVENT_LABELS = {
+    lesson_opened:    '▶ Abrió clase',
+    play_started:     '▶ Play',
+    play_paused:      '⏸ Pausa',
+    play_resumed:     '▶ Reanudó',
+    heartbeat:        '♥ Heartbeat',
+    lesson_completed: '✅ Completó',
+    lesson_closed:    '✕ Cerró',
+    playback_error:   '⚠ Error',
+    delivery:         '📦 Entrega',
+};
+
+async function openStudentModal(studentRow) {
+    // Mostrar modal con datos básicos inmediatamente
+    $('sm-name').textContent    = studentRow.name || studentRow.studentId || '—';
+    $('sm-email').textContent   = studentRow.email;
+    $('sm-stat-videos').textContent = studentRow.videosVistos  || 0;
+    $('sm-stat-cursos').textContent = studentRow.cursosActivos || 0;
+    $('sm-stat-tiempo').textContent = fmtTime(studentRow.tiempoTotalSeg);
+    $('sm-stat-ultimo').textContent = fmtDate(studentRow.ultimoAcceso);
+
+    // Badges estado + dispositivo
+    $('sm-meta').innerHTML = [
+        `<span class="badge ${studentRow.active ? 'badge-ok' : 'badge-error'}">${studentRow.active ? 'Activo' : 'Inactivo'}</span>`,
+        `<span class="badge badge-proc">ID: ${esc(studentRow.studentId || '—')}</span>`,
+        studentRow.deviceBound ? `<span class="badge badge-warn">Dispositivo vinculado</span>` : `<span class="badge badge-proc">Sin dispositivo</span>`,
+    ].join('');
+
+    $('sm-loading').style.display  = 'block';
+    $('sm-content').style.display  = 'none';
+    $('student-modal-bg').style.display = 'flex';
+    document.body.style.overflow   = 'hidden';
+
+    try {
+        const data = await api('GET', '/api/admin/student-history/' + encodeURIComponent(studentRow.email));
+
+        // Tabla de videos
+        const vBody = $('sm-videos-body');
+        if (!data.videos || !data.videos.length) {
+            vBody.innerHTML = '<tr><td colspan="5" style="color:var(--c-muted);text-align:center">Sin videos vistos aún</td></tr>';
+        } else {
+            vBody.innerHTML = data.videos.map(v => `
+                <tr>
+                    <td>${esc(v.title)}</td>
+                    <td style="font-size:0.78rem;color:var(--c-muted)">${esc(v.courseName)}</td>
+                    <td style="font-size:0.78rem;color:var(--c-muted)">${esc(v.moduleName)}</td>
+                    <td style="font-size:0.8rem">${fmtTime(v.tiempoSeg)}</td>
+                    <td style="font-size:0.78rem;color:var(--c-muted)">${fmtDate(v.ultimoAcceso)}</td>
+                </tr>
+            `).join('');
+        }
+
+        // Tabla de eventos
+        const eBody = $('sm-events-body');
+        if (!data.events || !data.events.length) {
+            eBody.innerHTML = '<tr><td colspan="6" style="color:var(--c-muted);text-align:center">Sin eventos registrados</td></tr>';
+        } else {
+            eBody.innerHTML = data.events.map(e => `
+                <tr>
+                    <td><span class="badge badge-proc" style="font-size:0.7rem">${esc(SM_EVENT_LABELS[e.eventType] || e.eventType || 'Entrega')}</span></td>
+                    <td style="font-size:0.78rem">${esc(e.videoTitle || e.videoId)}</td>
+                    <td style="font-size:0.78rem;color:var(--c-muted)">${esc(e.courseName || '—')}</td>
+                    <td style="font-size:0.72rem;font-family:monospace;color:var(--c-muted)">${esc(e.ip || '—')}</td>
+                    <td style="font-size:0.72rem;font-family:monospace;color:var(--c-muted)">${esc((e.deviceId || '—').slice(0, 16))}</td>
+                    <td style="font-size:0.78rem;color:var(--c-muted)">${fmtDate(e.at)}</td>
+                </tr>
+            `).join('');
+        }
+
+        $('sm-loading').style.display = 'none';
+        $('sm-content').style.display = 'block';
+    } catch (err) {
+        $('sm-loading').textContent = '⚠ Error cargando historial: ' + esc(String(err.message || err));
+    }
+}
+
+function closeStudentModal() {
+    $('student-modal-bg').style.display = 'none';
+    document.body.style.overflow = '';
 }
 
 async function loadDashboard(manual = false) {

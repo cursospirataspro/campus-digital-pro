@@ -817,6 +817,8 @@ module.exports.cleanExpiredPlaybackSessions = () => {
 const _qVideosByUser   = db.prepare('SELECT DISTINCT video_id, MAX(delivered_at) as last_at FROM audit_log WHERE user_id = ? GROUP BY video_id');
 const _qTimeByUser     = db.prepare('SELECT video_id, MAX(current_time) as max_time FROM active_sessions WHERE user_id = ? GROUP BY video_id');
 const _qLastAccess     = db.prepare('SELECT MAX(delivered_at) as last_at FROM audit_log WHERE user_id = ?');
+const _qAllModules     = db.prepare('SELECT * FROM modules ORDER BY course_id, sort_order ASC');
+const _qAllSessions    = db.prepare('SELECT * FROM active_sessions WHERE user_id = ? ORDER BY last_seen DESC');
 
 /**
  * Devuelve métricas de actividad por alumno.
@@ -876,6 +878,12 @@ module.exports.getStudentMetrics = () => {
         };
     });
 };
+
+/** Devuelve todos los módulos de todas las secciones */
+module.exports.getAllModules = () => _qAllModules.all();
+
+/** Devuelve todas las sesiones (activas e históricas) de un usuario */
+module.exports.getSessionsByUser = (userId) => _qAllSessions.all(userId);
 
 /** Limpia llaves de idempotencia antiguas (retención 48 horas). */
 module.exports.cleanOldPlaybackDedupe = () => {
