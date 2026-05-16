@@ -2461,7 +2461,7 @@ app.get('/api/b44/ping', (_req, res) => {
  * Devuelve connected:true solo si Base44 llamó la Monitor API en los últimos 2 minutos.
  */
 app.get('/api/b44/status', (_req, res) => {
-    const STALE_MS  = 2 * 60 * 1000; // 2 minutos
+    const STALE_MS  = 6 * 60 * 1000; // 6 minutos (Base44 jala cada 5 min como mínimo)
     const elapsed   = _lastMonitorAccessAt ? Date.now() - _lastMonitorAccessAt : Infinity;
     const connected = elapsed <= STALE_MS;
     res.json({
