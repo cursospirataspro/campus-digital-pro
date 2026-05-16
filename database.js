@@ -718,6 +718,13 @@ CREATE TABLE IF NOT EXISTS playback_sessions (
     created_at    TEXT NOT NULL,
     expires_at    TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS playback_event_dedupe (
+    idempotency_key TEXT PRIMARY KEY,
+    session_id      TEXT NOT NULL,
+    created_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dedupe_created_at ON playback_event_dedupe(created_at);
 `);
 
 const pbStmts = {
@@ -726,7 +733,10 @@ const pbStmts = {
         VALUES (@session_id, @student_id, @student_email, @course_id, @lesson_id, @device_id, @created_at, @expires_at)
     `),
     getSession:     db.prepare('SELECT * FROM playback_sessions WHERE session_id = ?'),
+    deleteSession:  db.prepare('DELETE FROM playback_sessions WHERE session_id = ?'),
     deleteExpired:  db.prepare("DELETE FROM playback_sessions WHERE expires_at < ?"),
+    insertDedupe:   db.prepare('INSERT OR IGNORE INTO playback_event_dedupe (idempotency_key, session_id, created_at) VALUES (?, ?, ?)'),
+    deleteOldDedupe: db.prepare("DELETE FROM playback_event_dedupe WHERE created_at < ?"),
     insertEvent:    db.prepare(`
         INSERT INTO audit_log (fingerprint, user_id, video_id, device_id, ip, user_agent, delivered_at, event_type)
         VALUES (@fingerprint, @user_id, @video_id, @device_id, @ip, @user_agent, @delivered_at, @event_type)
@@ -765,6 +775,20 @@ module.exports.getPlaybackSession = (sessionId) => {
     };
 };
 
+/** Finaliza explícitamente una sesión de reproducción externa. */
+module.exports.endPlaybackSession = (sessionId) => {
+    pbStmts.deleteSession.run(sessionId);
+};
+
+/**
+ * Registra una llave de idempotencia para eventos de playback.
+ * Devuelve true si es primera vez; false si el evento es duplicado/replay.
+ */
+module.exports.claimPlaybackEventIdempotency = (idempotencyKey, sessionId) => {
+    const result = pbStmts.insertDedupe.run(idempotencyKey, sessionId, new Date().toISOString());
+    return result.changes > 0;
+};
+
 /** Registra un evento de reproducción en audit_log con su event_type */
 module.exports.logPlaybackEvent = ({ sessionId, studentId, lessonId, deviceId, ip, userAgent, eventType, extra }) => {
     const fp = `pb:${sessionId}:${eventType}:${Date.now()}`;
@@ -783,4 +807,10 @@ module.exports.logPlaybackEvent = ({ sessionId, studentId, lessonId, deviceId, i
 /** Limpia sesiones expiradas de la tabla playback_sessions */
 module.exports.cleanExpiredPlaybackSessions = () => {
     pbStmts.deleteExpired.run(new Date().toISOString());
-};;
+};
+
+/** Limpia llaves de idempotencia antiguas (retención 48 horas). */
+module.exports.cleanOldPlaybackDedupe = () => {
+    const threshold = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+    pbStmts.deleteOldDedupe.run(threshold);
+};

@@ -343,6 +343,14 @@ function requireAdmin(req, res, next) {
     next();
 }
 
+/** Contrato de error estandarizado para APIs de playback y tracking. */
+function apiError(res, status, code, message, details = null) {
+    return res.status(status).json({
+        ok: false,
+        error: { code, message, details, ts: new Date().toISOString() },
+    });
+}
+
 // ================================================================
 //  USUARIOS EN MEMORIA (reemplazar por base de datos en producción)
 //  Las contraseñas se almacenan como hashes bcrypt-like (PBKDF2 aquí
@@ -583,7 +591,14 @@ app.get('/api/video/:videoId/play', requireAuth, async (req, res) => {
 
         // Token de medios de corta duración
         const mediaToken = jwt.sign(
-            { sub: req.user.sub, videoId, fingerprint, watermarkText },
+            {
+                sub: req.user.sub,
+                videoId,
+                fingerprint,
+                watermarkText,
+                sessionId,
+                studentEmail: req.user.studentEmail || '',
+            },
             JWT_SECRET,
             { expiresIn: MEDIA_TTL, issuer: 'reproductor-cursos' }
         );
@@ -963,6 +978,39 @@ app.post('/api/courses/restore-bulk', requireAdmin, (req, res) => {
             const existing = db.getCourseById(c.id);
             if (existing) { skipped++; continue; }
             db.createCourse({ id: c.id, name: c.name.slice(0, 120), author: (c.author || '').slice(0, 100) });
+            inserted++;
+        } catch { skipped++; }
+    }
+    res.json({ ok: true, inserted, skipped });
+});
+
+/**
+ * POST /api/audit/seed-devices  [ADMIN]
+ * Restaura asociaciones email+deviceId en audit_log tras un deploy.
+ * Acepta [{ studentEmail, deviceId }] — inserta un registro mínimo por par si no existe ya.
+ */
+app.post('/api/audit/seed-devices', requireAdmin, (req, res) => {
+    const { records } = req.body || {};
+    if (!Array.isArray(records)) return res.status(400).json({ error: 'records array requerido' });
+    let inserted = 0, skipped = 0;
+    for (const r of records) {
+        const email    = (r.studentEmail || '').slice(0, 254).trim();
+        const deviceId = (r.deviceId     || '').slice(0, 128).trim();
+        if (!email || !deviceId || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { skipped++; continue; }
+        try {
+            const fp = `seed_${Buffer.from(email + ':' + deviceId).toString('base64').slice(0, 40)}`;
+            // Verificar si ya existe un registro con este fingerprint
+            const ex = db.detectLeak(fp);
+            if (ex) { skipped++; continue; }
+            db.logDelivery({
+                fingerprint:   fp,
+                userId:        email,
+                videoId:       'restored_association',
+                deviceId:      deviceId,
+                studentEmail:  email,
+                ip:            'restored',
+                userAgent:     'restored',
+            });
             inserted++;
         } catch { skipped++; }
     }
@@ -1815,12 +1863,49 @@ app.get('/api/b/:videoId/:segname', (req, res) => {
  */
 app.post('/api/session/heartbeat', (req, res) => {
     const { sessionId, mediaToken, currentTime } = req.body || {};
-    if (!sessionId || !mediaToken) return res.status(400).json({ error: 'sessionId y mediaToken requeridos' });
-    try { jwt.verify(mediaToken, JWT_SECRET); } catch {
-        return res.status(401).json({ revoked: true, reason: 'token_expired' });
+    if (!sessionId || !mediaToken) {
+        return apiError(res, 400, 'BAD_REQUEST', 'sessionId y mediaToken requeridos');
     }
+
+    let tokenPayload;
+    try {
+        tokenPayload = jwt.verify(mediaToken, JWT_SECRET);
+    } catch {
+        return res.status(401).json({
+            ok: false,
+            revoked: true,
+            reason: 'token_expired',
+            error: { code: 'TOKEN_EXPIRED', message: 'mediaToken inválido o expirado', details: null, ts: new Date().toISOString() },
+        });
+    }
+
+    if (tokenPayload.sessionId && tokenPayload.sessionId !== sessionId) {
+        return apiError(res, 409, 'SESSION_MISMATCH', 'sessionId no coincide con el mediaToken');
+    }
+
+    const tokenEmail = String(tokenPayload.studentEmail || tokenPayload.email || '').trim().toLowerCase();
+    if (tokenEmail) {
+        const student = db.findStudentByEmail(tokenEmail);
+        if (student && !student.active) {
+            db.endSession(sessionId);
+            return res.status(403).json({
+                ok: false,
+                revoked: true,
+                reason: 'access_revoked',
+                error: { code: 'ACCESS_REVOKED', message: 'Acceso revocado en tiempo real', details: null, ts: new Date().toISOString() },
+            });
+        }
+    }
+
     const updated = db.heartbeatSession(sessionId, currentTime);
-    if (!updated) return res.status(404).json({ revoked: true, reason: 'session_not_found' });
+    if (!updated) {
+        return res.status(404).json({
+            ok: false,
+            revoked: true,
+            reason: 'session_not_found',
+            error: { code: 'SESSION_NOT_FOUND', message: 'La sesión ya no existe o expiró', details: null, ts: new Date().toISOString() },
+        });
+    }
     res.json({ ok: true });
 });
 
@@ -1838,6 +1923,37 @@ app.post('/api/session/end', (req, res) => {
 // ================================================================
 //  RUTAS: AUDITORÍA Y MARCA DE AGUA [ADMIN]
 // ================================================================
+
+/**
+ * POST /api/audit/seed-devices  [ADMIN]
+ * Restaura asociaciones correo+deviceId en audit_log tras cada deploy.
+ * Body: { records: [{ studentEmail, deviceId }] }
+ */
+app.post('/api/audit/seed-devices', requireAdmin, (req, res) => {
+    const { records } = req.body || {};
+    if (!Array.isArray(records) || records.length === 0)
+        return res.status(400).json({ error: 'records array requerido' });
+
+    let inserted = 0, skipped = 0;
+    for (const r of records) {
+        const email    = (r.studentEmail || '').trim().slice(0, 254);
+        const deviceId = (r.deviceId     || '').trim().slice(0, 128);
+        if (!email || !deviceId) { skipped++; continue; }
+        try {
+            db.logDelivery({
+                fingerprint:  `seed_${deviceId}`,
+                userId:       email,
+                videoId:      'seed',
+                deviceId,
+                studentEmail: email,
+                ip:           'restored',
+                userAgent:    'seed-restore',
+            });
+            inserted++;
+        } catch { skipped++; }
+    }
+    res.json({ ok: true, inserted, skipped });
+});
 
 /**
  * POST /api/watermark/log
@@ -2023,25 +2139,46 @@ app.post('/api/playback/event', (req, res) => {
     // Verificar token de sesión
     const authHeader = req.headers['authorization'] || '';
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-    if (!token) return res.status(401).json({ error: 'Token de sesión requerido' });
+    if (!token) return apiError(res, 401, 'UNAUTHORIZED', 'Token de sesión requerido');
 
     let payload;
     try {
         payload = jwt.verify(token, JWT_SECRET, { issuer: 'reproductor-cursos' });
     } catch {
-        return res.status(401).json({ error: 'Token de sesión inválido o expirado' });
+        return apiError(res, 401, 'TOKEN_EXPIRED', 'Token de sesión inválido o expirado');
     }
 
     if (payload.scope !== 'playback') {
-        return res.status(403).json({ error: 'Token no autorizado para este endpoint' });
+        return apiError(res, 403, 'ACCESS_DENIED', 'Token no autorizado para este endpoint');
     }
 
-    const { eventType, timestamp, extra } = req.body || {};
+    const { eventType, timestamp, extra, eventId, idempotencyKey } = req.body || {};
 
     if (!eventType || !ALLOWED_EVENT_TYPES.has(eventType)) {
-        return res.status(400).json({
-            error: `eventType inválido. Permitidos: ${[...ALLOWED_EVENT_TYPES].join(', ')}`,
-        });
+        return apiError(res, 400, 'INVALID_EVENT_TYPE', `eventType inválido. Permitidos: ${[...ALLOWED_EVENT_TYPES].join(', ')}`);
+    }
+
+    const replayKey = String(idempotencyKey || eventId || '').trim();
+    if (!replayKey) {
+        return apiError(res, 400, 'MISSING_IDEMPOTENCY_KEY', 'idempotencyKey (o eventId) es obligatorio');
+    }
+
+    const pbSession = db.getPlaybackSession(payload.sessionId);
+    if (!pbSession) {
+        return apiError(res, 404, 'SESSION_NOT_FOUND', 'La sesión de playback no existe o expiró');
+    }
+
+    const tokenEmail = String(payload.studentEmail || '').trim().toLowerCase();
+    if (tokenEmail) {
+        const student = db.findStudentByEmail(tokenEmail);
+        if (student && !student.active) {
+            db.endPlaybackSession(payload.sessionId);
+            return apiError(res, 403, 'ACCESS_REVOKED', 'Acceso revocado en tiempo real');
+        }
+    }
+
+    if (!db.claimPlaybackEventIdempotency(replayKey, payload.sessionId)) {
+        return apiError(res, 409, 'REPLAY_DETECTED', 'Evento duplicado (idempotencyKey ya procesado)');
     }
 
     const ip = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown').split(',')[0].trim();
@@ -2058,7 +2195,13 @@ app.post('/api/playback/event', (req, res) => {
         extra:        extra || null,
     });
 
-    res.json({ ok: true, sessionId: payload.sessionId, eventType, timestamp: timestamp || new Date().toISOString() });
+    res.json({
+        ok: true,
+        sessionId: payload.sessionId,
+        eventType,
+        idempotencyKey: replayKey,
+        timestamp: timestamp || new Date().toISOString(),
+    });
 });
 
 // ================================================================
@@ -2336,18 +2479,26 @@ app.get('/api/b44/status', (_req, res) => {
 app.post('/api/b44/track', (req, res) => {
     const auth  = req.headers['authorization'] || '';
     const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-    if (!token) return res.status(401).json({ error: 'unauthorized' });
+    if (!token) return apiError(res, 401, 'UNAUTHORIZED', 'Token requerido');
 
     let payload;
     try { payload = jwt.verify(token, JWT_SECRET); }
-    catch { return res.status(401).json({ error: 'token inválido o expirado' }); }
+    catch { return apiError(res, 401, 'TOKEN_EXPIRED', 'token inválido o expirado'); }
 
-    const { eventType, videoId, deviceId, extra } = req.body || {};
+    const { eventType, videoId, deviceId, extra, eventId, idempotencyKey } = req.body || {};
 
     if (!eventType || !B44_ALLOWED_EVENTS.has(eventType)) {
-        return res.status(400).json({
-            error: `eventType inválido. Permitidos: ${[...B44_ALLOWED_EVENTS].join(', ')}`,
-        });
+        return apiError(res, 400, 'INVALID_EVENT_TYPE', `eventType inválido. Permitidos: ${[...B44_ALLOWED_EVENTS].join(', ')}`);
+    }
+
+    const replayKey = String(idempotencyKey || eventId || '').trim();
+    if (!replayKey) {
+        return apiError(res, 400, 'MISSING_IDEMPOTENCY_KEY', 'idempotencyKey (o eventId) es obligatorio');
+    }
+
+    const sessionId = String(payload.sessionId || `b44:${payload.sub || 'unknown'}`);
+    if (!db.claimPlaybackEventIdempotency(replayKey, sessionId)) {
+        return apiError(res, 409, 'REPLAY_DETECTED', 'Evento duplicado (idempotencyKey ya procesado)');
     }
 
     const vid = String(videoId  || payload.videoId  || 'unknown').slice(0, 100);
@@ -2358,7 +2509,7 @@ app.post('/api/b44/track', (req, res) => {
     // 1. Guardar en BD local (siempre, confiable)
     try {
         db.logPlaybackEvent({
-            sessionId: `b44-${did}-${Date.now()}`,
+            sessionId,
             studentId: did,
             lessonId:  vid,
             deviceId:  did,
@@ -2392,6 +2543,7 @@ app.use((req, res) => res.status(404).json({ error: 'No encontrado' }));
 setInterval(() => {
     db.cleanExpiredSessions();
     db.cleanExpiredPlaybackSessions();
+    db.cleanOldPlaybackDedupe();
 }, 60_000);
 
 app.listen(PORT, () => {
