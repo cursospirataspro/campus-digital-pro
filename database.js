@@ -809,6 +809,74 @@ module.exports.cleanExpiredPlaybackSessions = () => {
     pbStmts.deleteExpired.run(new Date().toISOString());
 };
 
+// ================================================================
+//  MÉTRICAS POR ALUMNO — para el Dashboard y Monitor API
+// ================================================================
+
+// Queries SQL ejecutadas en el momento (no preparadas porque usan GROUP BY)
+const _qVideosByUser   = db.prepare('SELECT DISTINCT video_id, MAX(delivered_at) as last_at FROM audit_log WHERE user_id = ? GROUP BY video_id');
+const _qTimeByUser     = db.prepare('SELECT video_id, MAX(current_time) as max_time FROM active_sessions WHERE user_id = ? GROUP BY video_id');
+const _qLastAccess     = db.prepare('SELECT MAX(delivered_at) as last_at FROM audit_log WHERE user_id = ?');
+
+/**
+ * Devuelve métricas de actividad por alumno.
+ * Para cada alumno: videos vistos, cursos activos, módulos, tiempo total, último acceso.
+ */
+module.exports.getStudentMetrics = () => {
+    const students = stmts.getAllStudents.all();
+    const catalog  = stmts.getCatalogAll.all();
+    const courses  = stmts.getAllCourses.all();
+
+    // Índices rápidos
+    const vidMap    = {};
+    const courseMap = {};
+    for (const v of catalog)  vidMap[v.video_id]  = v;
+    for (const c of courses)  courseMap[c.id]      = c;
+
+    return students.map(s => {
+        const videos   = _qVideosByUser.all(s.id);   // [{video_id, last_at}]
+        const sessions = _qTimeByUser.all(s.id);     // [{video_id, max_time}]
+
+        // Tiempo total = suma del max current_time de cada video visto
+        const tiempoTotalSeg = sessions.reduce((sum, r) => sum + (r.max_time || 0), 0);
+
+        // Cursos y módulos distintos donde el alumno tiene actividad
+        const courseIds = new Set();
+        const moduleIds = new Set();
+        for (const ev of videos) {
+            const v = vidMap[ev.video_id];
+            if (v?.course_id) courseIds.add(v.course_id);
+            if (v?.module_id) moduleIds.add(v.module_id);
+        }
+
+        // Detalles por curso
+        const cursosDetalle = [...courseIds].map(cId => {
+            const vidsEnCurso = videos.filter(ev => vidMap[ev.video_id]?.course_id === cId);
+            return {
+                courseId:   cId,
+                courseName: courseMap[cId]?.name || cId,
+                clases:     vidsEnCurso.length,
+            };
+        });
+
+        const lastAccess = _qLastAccess.get(s.id)?.last_at || s.last_login || null;
+
+        return {
+            studentId:      s.student_id,
+            email:          s.email,
+            name:           s.name  || '',
+            active:         s.active === 1,
+            videosVistos:   videos.length,
+            cursosActivos:  courseIds.size,
+            modulosVistos:  moduleIds.size,
+            tiempoTotalSeg,
+            ultimoAcceso:   lastAccess,
+            deviceBound:    !!s.device_id,
+            cursos:         cursosDetalle,
+        };
+    });
+};
+
 /** Limpia llaves de idempotencia antiguas (retención 48 horas). */
 module.exports.cleanOldPlaybackDedupe = () => {
     const threshold = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();

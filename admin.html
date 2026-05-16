@@ -373,20 +373,64 @@
     <main>
         <!-- ---- DASHBOARD ---- -->
         <div class="page active" id="page-dashboard">
-            <h2>Dashboard</h2>
-            <p class="subtitle">Resumen del sistema de proteccion.</p>
-            <div class="stats-grid" id="stats-grid">
-                <div class="stat-card"><div class="num" id="stat-videos">—</div><div class="lbl">Videos procesados</div></div>
-                <div class="stat-card"><div class="num" id="stat-deliveries">—</div><div class="lbl">Entregas registradas</div></div>
-                <div class="stat-card"><div class="num" id="stat-users">—</div><div class="lbl">Usuarios unicos</div></div>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+                <h2 style="margin-bottom:0">Dashboard</h2>
+                <div style="display:flex;align-items:center;gap:10px">
+                    <span id="dash-last-update" style="color:var(--c-muted);font-size:0.75rem"></span>
+                    <button class="btn-gear" id="btn-dash-refresh" onclick="loadDashboard(true)">&#8635; Actualizar</button>
+                </div>
             </div>
+            <p class="subtitle">Métricas en tiempo real por alumno — auto-actualización cada 10 min.</p>
+
+            <!-- Resumen global -->
+            <div class="stats-grid" id="stats-grid">
+                <div class="stat-card"><div class="num" id="stat-alumnos">—</div><div class="lbl">Alumnos registrados</div></div>
+                <div class="stat-card"><div class="num" id="stat-activos">—</div><div class="lbl">Alumnos activos</div></div>
+                <div class="stat-card"><div class="num" id="stat-videos-vistos">—</div><div class="lbl">Videos vistos (total)</div></div>
+                <div class="stat-card"><div class="num" id="stat-tiempo">—</div><div class="lbl">Tiempo total reproducido</div></div>
+            </div>
+
+            <!-- Tabla de métricas por alumno -->
             <div class="card">
-                <h3>Ultimas reproducciones</h3>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+                    <h3 style="margin-bottom:0">Actividad por alumno</h3>
+                    <input type="text" id="dash-search" placeholder="Buscar alumno..." style="background:var(--c-surface2);border:1px solid var(--c-border);color:var(--c-text);border-radius:6px;padding:6px 10px;font-size:0.82rem;width:200px;outline:none" oninput="filterDashTable(this.value)">
+                </div>
                 <div class="table-wrap">
-                    <table id="recent-table">
-                        <thead><tr><th>Usuario</th><th>VideoId</th><th>IP</th><th>Fecha</th></tr></thead>
-                        <tbody id="recent-body"><tr><td colspan="4" style="color:var(--c-muted)">Cargando...</td></tr></tbody>
+                    <table id="metrics-table">
+                        <thead>
+                            <tr>
+                                <th>Alumno</th>
+                                <th>Email</th>
+                                <th>Estado</th>
+                                <th>Cursos activos</th>
+                                <th>Videos vistos</th>
+                                <th>Módulos</th>
+                                <th>Tiempo reprod.</th>
+                                <th>Último acceso</th>
+                                <th>Dispositivo</th>
+                            </tr>
+                        </thead>
+                        <tbody id="metrics-body">
+                            <tr><td colspan="9" style="color:var(--c-muted);text-align:center">Cargando...</td></tr>
+                        </tbody>
                     </table>
+                </div>
+            </div>
+
+            <!-- Detalle de cursos por alumno (expandible) -->
+            <div id="dash-detail-panel" style="display:none">
+                <div class="card">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+                        <h3 id="dash-detail-title" style="margin-bottom:0">Detalle de cursos</h3>
+                        <button class="btn-gear" onclick="closeDashDetail()">✕ Cerrar</button>
+                    </div>
+                    <div class="table-wrap">
+                        <table>
+                            <thead><tr><th>Curso</th><th>Clases vistas</th></tr></thead>
+                            <tbody id="dash-detail-body"></tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>
@@ -860,6 +904,7 @@ function showApp(payload) {
     $('app').classList.add('visible');
     $('admin-info').textContent = 'Sesion: ' + (payload.username || '');
     loadDashboard();
+    startDashAutoRefresh();
 }
 
 // ================================================================
@@ -891,27 +936,109 @@ async function api(method, path, body) {
 }
 
 // ================================================================
-//  DASHBOARD
+//  DASHBOARD — Métricas por alumno con auto-refresh
 // ================================================================
-async function loadDashboard() {
+let _dashData       = [];   // cache para el filtro de búsqueda
+let _dashRefreshId  = null; // ID del setInterval
+
+function fmtTime(seconds) {
+    if (!seconds || seconds <= 0) return '—';
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    if (h > 0) return `${h}h ${m}m`;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
+}
+
+function fmtDate(d) {
+    if (!d) return '—';
+    try { return new Date(d).toLocaleString('es', { dateStyle: 'short', timeStyle: 'short' }); }
+    catch { return d; }
+}
+
+function renderMetricsTable(data) {
+    const tbody = $('metrics-body');
+    if (!data.length) {
+        tbody.innerHTML = '<tr><td colspan="9" style="color:var(--c-muted);text-align:center">Sin alumnos registrados</td></tr>';
+        return;
+    }
+    tbody.innerHTML = data.map(m => `
+        <tr>
+            <td>
+                ${m.cursos && m.cursos.length ? `<span class="copy-link" onclick="openDashDetail(${JSON.stringify(m).replace(/"/g, '&quot;')})">${esc(m.name || m.studentId || '—')}</span>` : esc(m.name || m.studentId || '—')}
+            </td>
+            <td style="font-size:0.8rem">${esc(m.email)}</td>
+            <td><span class="badge ${m.active ? 'badge-ok' : 'badge-error'}">${m.active ? 'Activo' : 'Inactivo'}</span></td>
+            <td style="text-align:center">${m.cursosActivos || 0}</td>
+            <td style="text-align:center">${m.videosVistos || 0}</td>
+            <td style="text-align:center">${m.modulosVistos || 0}</td>
+            <td style="font-size:0.8rem">${fmtTime(m.tiempoTotalSeg)}</td>
+            <td style="font-size:0.78rem;color:var(--c-muted)">${fmtDate(m.ultimoAcceso)}</td>
+            <td><span class="badge ${m.deviceBound ? 'badge-warn' : 'badge-proc'}">${m.deviceBound ? 'Vinculado' : 'Libre'}</span></td>
+        </tr>
+    `).join('');
+}
+
+function filterDashTable(q) {
+    if (!q.trim()) { renderMetricsTable(_dashData); return; }
+    const lq = q.toLowerCase();
+    renderMetricsTable(_dashData.filter(m =>
+        (m.email || '').toLowerCase().includes(lq) ||
+        (m.name  || '').toLowerCase().includes(lq) ||
+        (m.studentId || '').toLowerCase().includes(lq)
+    ));
+}
+
+function openDashDetail(m) {
+    $('dash-detail-title').textContent = `Cursos de: ${m.name || m.email}`;
+    $('dash-detail-body').innerHTML = (m.cursos || []).map(c => `
+        <tr>
+            <td>${esc(c.courseName)}</td>
+            <td style="text-align:center">${c.clases}</td>
+        </tr>
+    `).join('') || '<tr><td colspan="2" style="color:var(--c-muted)">Sin actividad en cursos</td></tr>';
+    $('dash-detail-panel').style.display = 'block';
+}
+
+function closeDashDetail() {
+    $('dash-detail-panel').style.display = 'none';
+}
+
+async function loadDashboard(manual = false) {
+    const btn = $('btn-dash-refresh');
+    if (btn) { btn.disabled = true; btn.textContent = '⌛ Cargando...'; }
     try {
-        const [catalogData, auditData] = await Promise.all([
-            api('GET', '/api/video/catalog'),
-            api('GET', '/api/audit/log?limit=200'),
-        ]);
-        const catalog = catalogData.catalog || [];
-        const entries = auditData.entries || [];
-        $('stat-videos').textContent    = catalog.filter(v => v.status === 'ready').length;
-        $('stat-deliveries').textContent = entries.length;
-        const users = new Set(entries.map(e => e.userId));
-        $('stat-users').textContent = users.size;
-        const tbody = $('recent-body');
-        const recent = entries.slice(0, 10);
-        if (!recent.length) { tbody.innerHTML = '<tr><td colspan="4" style="color:var(--c-muted)">Sin registros aun</td></tr>'; return; }
-        tbody.innerHTML = recent.map(e =>
-            `<tr><td>${esc(e.userId.slice(0,8)+'...')}</td><td>${esc(e.videoId.slice(0,8)+'...')}</td><td style="font-size:0.72rem;font-family:monospace">${esc((e.deviceId||e.ip||'—').slice(0,16))}</td><td>${new Date(e.deliveredAt).toLocaleString()}</td></tr>`
-        ).join('');
-    } catch (err) { console.error(err); }
+        const data = await api('GET', '/api/admin/metrics');
+        _dashData = data.metrics || [];
+
+        // Stats globales
+        const totalAlumnos  = _dashData.length;
+        const activos       = _dashData.filter(m => m.active).length;
+        const totalVideos   = _dashData.reduce((s, m) => s + (m.videosVistos  || 0), 0);
+        const totalTiempo   = _dashData.reduce((s, m) => s + (m.tiempoTotalSeg || 0), 0);
+
+        $('stat-alumnos').textContent      = totalAlumnos;
+        $('stat-activos').textContent      = activos;
+        $('stat-videos-vistos').textContent = totalVideos;
+        $('stat-tiempo').textContent       = fmtTime(totalTiempo);
+
+        renderMetricsTable(_dashData);
+
+        const now = new Date().toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' });
+        $('dash-last-update').textContent = `Actualizado: ${now}`;
+
+    } catch (err) {
+        $('metrics-body').innerHTML = `<tr><td colspan="9" style="color:var(--c-error)">Error cargando métricas: ${esc(String(err.message || err))}</td></tr>`;
+    } finally {
+        if (btn) { btn.disabled = false; btn.innerHTML = '&#8635; Actualizar'; }
+    }
+}
+
+// Auto-refresh cada 10 minutos
+function startDashAutoRefresh() {
+    if (_dashRefreshId) clearInterval(_dashRefreshId);
+    _dashRefreshId = setInterval(() => loadDashboard(), 10 * 60 * 1000);
 }
 
 // ================================================================

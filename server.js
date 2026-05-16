@@ -2560,3 +2560,70 @@ app.listen(PORT, () => {
     console.log('=========================================');
     console.log('');
 });
+
+// ================================================================
+//  PLAYER TOKEN — Base44 u otro campus llama este endpoint
+//  para generar un enlace de acceso corto para un alumno/video.
+//
+//  POST /api/player/create-token
+//  Auth: Admin JWT
+//  Body: { email, videoId, courseId? }
+//  → { playbackUrl, token, expiresIn }
+// ================================================================
+app.post('/api/player/create-token', requireAdmin, (req, res) => {
+    const { email, videoId, courseId, studentCode } = req.body || {};
+    if (!email || !videoId) {
+        return apiError(res, 400, 'BAD_REQUEST', 'email y videoId son requeridos');
+    }
+
+    const student = db.findStudentByEmail(email.trim().toLowerCase());
+    if (!student) return apiError(res, 404, 'NOT_FOUND', 'Alumno no encontrado');
+    if (!student.active) return apiError(res, 403, 'ACCESS_DENIED', 'Alumno desactivado');
+
+    // Token de entrada — corto plazo (10 min). No es el JWT de sesión,
+    // es solo el "pase de entrada" que el reproductor valida al cargar.
+    const playToken = jwt.sign(
+        {
+            sub:         student.id,
+            email:       student.email,
+            courseId:    courseId  || null,
+            videoId,
+            studentCode: studentCode || student.studentId || student.id,
+            type:        'playback_entry',
+            admin:       false,
+        },
+        JWT_SECRET,
+        { expiresIn: '10m', issuer: 'reproductor-cursos' }
+    );
+
+    const baseUrl = (process.env.PUBLIC_URL || 'https://campus-digital-pro.onrender.com').replace(/\/$/, '');
+    const playbackUrl = `${baseUrl}/?v=${encodeURIComponent(videoId)}&pt=${playToken}`;
+
+    res.json({ playbackUrl, token: playToken, expiresIn: '10m' });
+});
+
+// ================================================================
+//  ADMIN METRICS — Dashboard usa este endpoint (auth: admin JWT)
+//  GET /api/admin/metrics
+//  Devuelve métricas por alumno: cursos, videos, tiempo, último acceso
+// ================================================================
+app.get('/api/admin/metrics', requireAdmin, (_req, res) => {
+    try {
+        const metrics = db.getStudentMetrics();
+        res.json({ ts: new Date().toISOString(), total: metrics.length, metrics });
+    } catch (err) {
+        console.error('[admin/metrics]', err);
+        apiError(res, 500, 'INTERNAL_ERROR', 'Error calculando métricas');
+    }
+});
+
+// También exponer vía Monitor API para Base44/Google Sheets
+app.get('/api/monitor/metrics', requireMonitorKey, (_req, res) => {
+    try {
+        const metrics = db.getStudentMetrics();
+        res.json({ ts: new Date().toISOString(), total: metrics.length, metrics });
+    } catch (err) {
+        console.error('[monitor/metrics]', err);
+        apiError(res, 500, 'INTERNAL_ERROR', 'Error calculando métricas');
+    }
+});
