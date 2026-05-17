@@ -2532,9 +2532,6 @@ app.post('/api/b44/track', (req, res) => {
     }).catch(() => {}); // silencio intencional — Base44 puede estar en mantenimiento
 });
 
-// Catch-all 404
-app.use((req, res) => res.status(404).json({ error: 'No encontrado' }));
-
 // ================================================================
 //  ARRANQUE
 // ================================================================
@@ -2715,3 +2712,6 @@ app.get('/api/admin/student-history/:email', requireAdmin, (req, res) => {
         apiError(res, 500, 'INTERNAL_ERROR', 'Error obteniendo historial');
     }
 });
+
+// Catch-all 404 — debe ser el último middleware
+app.use((req, res) => res.status(404).json({ error: 'No encontrado' }));
