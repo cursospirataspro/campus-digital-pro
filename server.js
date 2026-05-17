@@ -2675,28 +2675,40 @@ setInterval(() => {
     db.cleanOldPlaybackDedupe();
 }, 60_000);
 
-// Inicializar Google Sheets y restaurar datos persistentes ANTES de escuchar
-(async () => {
-    const sheetsOk = await sheets.init();
-    if (sheetsOk) {
-        const data = await sheets.hydrate();
-        if (data) db.hydrateFromSheets(data);
-    }
-    app.listen(PORT, () => {
-        console.log('');
-        console.log('=========================================');
-        console.log('  Reproductor DRM — Servidor iniciado');
-        console.log(`  Reproductor: http://localhost:${PORT}`);
-        console.log(`  Admin panel: http://localhost:${PORT}/admin`);
-        console.log(`  Modo: ${LOCAL_MODE ? 'LOCAL (sin B2)' : 'Backblaze B2'}`);
-        console.log('');
-        console.log('  Credenciales admin:');
-        console.log(`  Usuario: ${process.env.ADMIN_USER}`);
-        console.log(`  Password: ${process.env.ADMIN_PASS}`);
-        console.log('=========================================');
-        console.log('');
-    });
-})();
+// Escuchar PRIMERO para que Render no mate el proceso por startup timeout.
+// La hidratación de Sheets ocurre en background DESPUÉS de que el servidor ya responde.
+app.listen(PORT, () => {
+    console.log('');
+    console.log('=========================================');
+    console.log('  Reproductor DRM — Servidor iniciado');
+    console.log(`  Reproductor: http://localhost:${PORT}`);
+    console.log(`  Admin panel: http://localhost:${PORT}/admin`);
+    console.log(`  Modo: ${LOCAL_MODE ? 'LOCAL (sin B2)' : 'Backblaze B2'}`);
+    console.log('');
+    console.log('  Credenciales admin:');
+    console.log(`  Usuario: ${process.env.ADMIN_USER}`);
+    console.log(`  Password: ${process.env.ADMIN_PASS}`);
+    console.log('=========================================');
+    console.log('');
+
+    // Hidratar desde Google Sheets en background — no bloquea el arranque
+    (async () => {
+        try {
+            const sheetsOk = await sheets.init();
+            if (sheetsOk) {
+                const data = await sheets.hydrate();
+                if (data) {
+                    db.hydrateFromSheets(data);
+                    console.log('[startup] Hidratación desde Sheets completada');
+                }
+            } else {
+                console.warn('[startup] Google Sheets no disponible — usando datos de env vars');
+            }
+        } catch (err) {
+            console.error('[startup] Error hidratando desde Sheets:', err.message);
+        }
+    })();
+});
 
 // ================================================================
 //  PLAYER TOKEN — Base44 u otro campus llama este endpoint
