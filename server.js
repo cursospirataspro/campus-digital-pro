@@ -908,7 +908,8 @@ app.post('/api/catalog/restore-bulk', requireAdmin, (req, res) => {
                 uploadedAt: v.uploadedAt || new Date().toISOString(),
             };
             db.addToCatalog(entry);
-            sheets.saveVideo(entry);
+            // NO llamar sheets.saveVideo() aquí — lanzar 1285 upserts concurrentes
+            // causa OOM. El sync-sheets bulk al final del restore lo hace todo.
             inserted++;
         } catch { skipped++; }
     }
