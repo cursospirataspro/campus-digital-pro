@@ -2349,7 +2349,7 @@ async function loadAudit() {
         tbody.innerHTML = entries.map(e =>
             `<tr>
                 <td style="font-family:monospace;font-size:0.78rem">${esc(e.fingerprint)}</td>
-                <td>${esc(e.userId)}</td>
+                <td title="${esc(e.userId)}">${esc(e.studentEmail || e.userId)}</td>
                 <td style="font-family:monospace;font-size:0.75rem">${esc(e.videoId.slice(0,8)+'...')}</td>
                 <td style="font-size:0.72rem;font-family:monospace">${esc((e.deviceId||'—').slice(0,16))}</td>
                 <td>${esc(e.ip)}</td>

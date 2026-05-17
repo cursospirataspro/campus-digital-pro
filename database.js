@@ -553,6 +553,18 @@ module.exports.deleteCatalogEntry = (videoId) =>
 })();
 
 // Seed de dominios permitidos desde env var
+// Dominios predeterminados — siempre presentes (se re-insertan en cada inicio)
+(function seedDefaultDomains() {
+    const DEFAULTS = [
+        'https://campusdigitalpro.com',
+        'https://campusdigitalpro.com/student',
+        'https://campusdigitalpro.com/student/course',
+    ];
+    const ins = db.prepare('INSERT OR IGNORE INTO allowed_domains (domain) VALUES (?)');
+    for (const d of DEFAULTS) ins.run(d);
+    console.log('[db] Dominios predeterminados insertados:', DEFAULTS.length);
+})();
+
 (function seedDomainsFromEnv() {
     const raw = process.env.ALLOWED_DOMAINS_SEED;
     if (!raw) return;

@@ -491,22 +491,27 @@ app.get('/api/auth/auto', (req, res) => {
     const rawUid = (req.query.uid || '').slice(0, 254).trim();
     const studentEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawUid) ? rawUid : '';
 
-    // Auto-registrar alumno si llega con email y no existe aún en la BD
+    // Auto-registrar alumno si llega con email. Usar su ID real como sub del JWT
+    // para que audit_log.user_id coincida con students.id y las métricas funcionen.
+    let jwtSub = sessionId;
     if (studentEmail) {
         try {
-            const existing = db.findStudentByEmail(studentEmail);
-            if (!existing) {
-                const newStudent = db.createStudent({
+            let student = db.findStudentByEmail(studentEmail);
+            if (!student) {
+                student = db.createStudent({
                     email:    studentEmail,
                     name:     studentEmail.split('@')[0],
                     deviceId: rawDid || null,
                     active:   true,
                 });
-                if (newStudent) sheets.saveStudent(newStudent).catch(() => {});
-            } else if (rawDid && !existing.device_id) {
+                if (student) sheets.saveStudent(student).catch(() => {});
+            } else if (rawDid && !student.device_id) {
                 // Vincular deviceId si el alumno aún no tiene uno
-                db.updateStudent(existing.id, { deviceId: rawDid });
+                db.updateStudent(student.id, { deviceId: rawDid });
             }
+            // Usar el ID real del alumno como sub — esto hace que audit_log.user_id
+            // coincida con students.id y getStudentMetrics() devuelva datos correctos
+            if (student) jwtSub = student.id;
         } catch (e) {
             console.error('[auth/auto] auto-register error:', e.message);
         }
@@ -514,7 +519,7 @@ app.get('/api/auth/auto', (req, res) => {
 
     const token = jwt.sign(
         {
-            sub:           sessionId,
+            sub:           jwtSub,
             email:         studentEmail || 'guest',
             label:         deviceId,
             deviceId,
