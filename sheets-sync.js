@@ -266,6 +266,118 @@ module.exports.saveProgress = (p) => {
 };
 
 // ============================================================
+//  BULK WRITE — escribe todas las filas de un tab en 1 sola llamada
+// ============================================================
+
+/**
+ * Limpia el tab (excepto cabecera) y escribe todas las filas de una vez.
+ * Mucho más eficiente que _upsert() en bucle (evita el rate limit de Sheets).
+ */
+async function _bulkWriteTab(tabKey, rows) {
+    if (!_ready || rows.length === 0) return;
+    const tabName = TABS[tabKey];
+    const hdrs    = HEADERS[tabKey];
+
+    // 1. Limpiar datos existentes (mantener cabecera en A1)
+    const meta = await _api.spreadsheets.values.get({
+        spreadsheetId: SHEET_ID,
+        range: `${tabName}!A1:A`,
+        fields: 'values',
+    });
+    const totalRows = (meta.data.values || []).length;
+    if (totalRows > 1) {
+        await _api.spreadsheets.values.clear({
+            spreadsheetId: SHEET_ID,
+            range: `${tabName}!A2:ZZ${totalRows + 1}`,
+        });
+    }
+
+    // 2. Escribir todas las filas en una sola llamada (en chunks de 1000 para no exceder límite de payload)
+    const CHUNK = 1000;
+    for (let i = 0; i < rows.length; i += CHUNK) {
+        const chunk = rows.slice(i, i + CHUNK);
+        await _api.spreadsheets.values.append({
+            spreadsheetId   : SHEET_ID,
+            range           : `${tabName}!A2`,
+            valueInputOption: 'RAW',
+            insertDataOption: 'INSERT_ROWS',
+            resource: {
+                values: chunk.map(obj => hdrs.map(h => String(obj[h] ?? ''))),
+            },
+        });
+    }
+    console.log(`[sheets] bulk write "${tabName}": ${rows.length} filas`);
+}
+
+/**
+ * Sincroniza TODO el catálogo a Sheets de una vez (bulk).
+ * Llamar después de restaurar un backup masivo.
+ */
+module.exports.syncCatalogBulk = async (videos) => {
+    if (!_ready) return false;
+    try {
+        await _bulkWriteTab('catalog', videos.map(v => ({
+            videoId    : v.videoId      || v.video_id || '',
+            title      : v.title        || '',
+            courseId   : v.courseId     || v.course_id || '',
+            moduleId   : v.moduleId     || v.module_id || '',
+            status     : v.status       || 'ready',
+            sortOrder  : v.sortOrder    || v.sort_order || 0,
+            durationSecs: v.durationSecs || v.duration_secs || 0,
+            uploadedAt : v.uploadedAt   || v.uploaded_at || new Date().toISOString(),
+        })));
+        return true;
+    } catch (err) {
+        console.error('[sheets] syncCatalogBulk:', err.message);
+        return false;
+    }
+};
+
+/**
+ * Sincroniza todos los cursos a Sheets de una vez (bulk).
+ */
+module.exports.syncCoursesBulk = async (courses) => {
+    if (!_ready) return false;
+    try {
+        await _bulkWriteTab('courses', courses.map(c => ({
+            id         : c.id          || '',
+            name       : c.name        || '',
+            author     : c.author      || '',
+            description: c.description || '',
+            createdAt  : c.createdAt   || c.created_at || new Date().toISOString(),
+        })));
+        return true;
+    } catch (err) {
+        console.error('[sheets] syncCoursesBulk:', err.message);
+        return false;
+    }
+};
+
+/**
+ * Sincroniza todos los alumnos a Sheets de una vez (bulk).
+ */
+module.exports.syncStudentsBulk = async (students) => {
+    if (!_ready) return false;
+    try {
+        await _bulkWriteTab('students', students.map(s => ({
+            id          : s.id || s.student_id || '',
+            email       : s.email       || '',
+            name        : s.name        || '',
+            passwordHash: s.passwordHash || s.password_hash || '',
+            active      : (s.active === true || s.active === 1) ? '1' : '0',
+            deviceId    : s.deviceId    || s.device_id || '',
+            allowedVideos: Array.isArray(s.allowedVideos) ? s.allowedVideos.join(',') : (s.allowedVideos || s.allowed_videos || '*'),
+            createdAt   : s.createdAt   || s.created_at || new Date().toISOString(),
+            lastLogin   : s.lastLogin   || s.last_login || '',
+        })));
+        return true;
+    } catch (err) {
+        console.error('[sheets] syncStudentsBulk:', err.message);
+        return false;
+    }
+};
+
+// ============================================================
 //  API PÚBLICA — lectura / hidratación
 // ============================================================
 

@@ -2739,6 +2739,42 @@ app.post('/api/player/create-token', requireAdmin, (req, res) => {
 //  GET /api/admin/metrics
 //  Devuelve métricas por alumno: cursos, videos, tiempo, último acceso
 // ================================================================
+
+/**
+ * POST /api/admin/sync-sheets  [ADMIN]
+ * Vuelca todo el contenido actual de SQLite a Google Sheets en modo bulk.
+ * Usar después de cualquier restore masivo para garantizar que Sheets
+ * tenga todos los datos y sobrevivan futuros reinicios de Render.
+ */
+app.post('/api/admin/sync-sheets', requireAdmin, async (_req, res) => {
+    if (!sheets.isReady()) {
+        return res.status(503).json({ ok: false, error: 'Google Sheets no está conectado' });
+    }
+    try {
+        const catalog  = db.loadCatalog();
+        const courses  = db.getAllCourses();
+        const students = db.getAllStudents ? db.getAllStudents() : [];
+
+        const [catOk, crsOk, stuOk] = await Promise.all([
+            sheets.syncCatalogBulk(catalog),
+            sheets.syncCoursesBulk(courses),
+            sheets.syncStudentsBulk(students),
+        ]);
+
+        res.json({
+            ok: true,
+            synced: {
+                videos  : catOk ? catalog.length  : 'error',
+                courses : crsOk ? courses.length  : 'error',
+                students: stuOk ? students.length : 'error',
+            },
+        });
+    } catch (err) {
+        console.error('[sync-sheets]', err);
+        res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
 app.get('/api/admin/metrics', requireAdmin, (_req, res) => {
     try {
         const metrics = db.getStudentMetrics();
