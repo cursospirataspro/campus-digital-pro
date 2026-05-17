@@ -466,6 +466,17 @@
         <div class="page" id="page-catalog">
             <h2>Catalogo de Videos</h2>
             <p class="subtitle">Videos procesados y listos para reproduccion.</p>
+            <!-- Stats rápidos del catálogo -->
+            <div style="display:flex;gap:16px;margin-bottom:16px;flex-wrap:wrap">
+                <div style="background:var(--c-surface2);border:1px solid var(--c-border);border-radius:8px;padding:10px 22px;min-width:130px;text-align:center">
+                    <div id="cs-cursos" style="font-size:1.6rem;font-weight:700;color:var(--c-accent)">—</div>
+                    <div style="font-size:0.75rem;color:var(--c-muted);margin-top:2px">Cursos creados</div>
+                </div>
+                <div style="background:var(--c-surface2);border:1px solid var(--c-border);border-radius:8px;padding:10px 22px;min-width:130px;text-align:center">
+                    <div id="cs-videos" style="font-size:1.6rem;font-weight:700;color:var(--c-accent)">—</div>
+                    <div style="font-size:0.75rem;color:var(--c-muted);margin-top:2px">Clases en total</div>
+                </div>
+            </div>
 
             <!-- Botones superiores -->
             <div style="display:flex;justify-content:flex-end;gap:10px;margin-bottom:10px">
@@ -1342,6 +1353,10 @@ async function loadCourses() {
         const data = await api('GET', '/api/courses');
         allCoursesCache = data.courses || [];
         const unassigned = data.unassignedCount || 0;
+        // Actualizar stats de catálogo
+        const totalVideos = allCoursesCache.reduce((s, c) => s + (c.videoCount || 0), 0) + unassigned;
+        const csC = $('cs-cursos'); if (csC) csC.textContent = allCoursesCache.length;
+        const csV = $('cs-videos'); if (csV) csV.textContent = totalVideos;
         let html = '';
         for (const c of allCoursesCache) {
             html += `<div class="course-card" onclick="openCourse('${esc(c.id)}')">

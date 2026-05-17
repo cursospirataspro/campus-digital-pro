@@ -490,6 +490,28 @@ app.get('/api/auth/auto', (req, res) => {
     // Sanitizar studentEmail: formato básico de email, max 254 chars
     const rawUid = (req.query.uid || '').slice(0, 254).trim();
     const studentEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawUid) ? rawUid : '';
+
+    // Auto-registrar alumno si llega con email y no existe aún en la BD
+    if (studentEmail) {
+        try {
+            const existing = db.findStudentByEmail(studentEmail);
+            if (!existing) {
+                const newStudent = db.createStudent({
+                    email:    studentEmail,
+                    name:     studentEmail.split('@')[0],
+                    deviceId: rawDid || null,
+                    active:   true,
+                });
+                if (newStudent) sheets.saveStudent(newStudent).catch(() => {});
+            } else if (rawDid && !existing.device_id) {
+                // Vincular deviceId si el alumno aún no tiene uno
+                db.updateStudent(existing.id, { deviceId: rawDid });
+            }
+        } catch (e) {
+            console.error('[auth/auto] auto-register error:', e.message);
+        }
+    }
+
     const token = jwt.sign(
         {
             sub:           sessionId,
