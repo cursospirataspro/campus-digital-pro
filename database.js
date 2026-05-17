@@ -1137,3 +1137,104 @@ module.exports.getDailyStats = (userId, dateStr) => {
         ORDER BY pp.updated_at DESC
     `).all(userId, dayStart, dayEnd);
 };
+
+// ================================================================
+//  HIDRATACIÓN DESDE GOOGLE SHEETS
+//  Llamar al arrancar el servidor para restaurar datos persistentes.
+// ================================================================
+
+/**
+ * Inserta/actualiza alumnos, cursos y módulos que vienen de Sheets.
+ * Es idempotente: si el registro ya existe (mismo id) lo ignora.
+ */
+module.exports.hydrateFromSheets = ({ students = [], courses = [], modules = [], catalog = [] } = {}) => {
+    const insertOrIgnoreStudent = db.prepare(`
+        INSERT OR IGNORE INTO students
+            (id, email, student_id, name, active, allowed_videos, device_id, created_at, last_login)
+        VALUES (@id, @email, @student_id, @name, @active, @allowed_videos, @device_id, @created_at, @last_login)
+    `);
+    const insertOrIgnoreCourse = db.prepare(`
+        INSERT OR IGNORE INTO courses (id, name, author, sort_order, created_at)
+        VALUES (@id, @name, @author, @sort_order, @created_at)
+    `);
+    const insertOrIgnoreModule = db.prepare(`
+        INSERT OR IGNORE INTO modules (id, course_id, parent_id, name, sort_order, created_at)
+        VALUES (@id, @course_id, @parent_id, @name, @sort_order, @created_at)
+    `);
+    const insertOrIgnoreVideo = db.prepare(`
+        INSERT OR IGNORE INTO catalog
+            (video_id, title, status, segment_count, key_id, uploaded_at, source_type, bunny_url, course_id, sort_order, module_id)
+        VALUES (@video_id, @title, @status, @segment_count, @key_id, @uploaded_at, @source_type, @bunny_url, @course_id, @sort_order, @module_id)
+    `);
+
+    const txStudents = db.transaction((rows) => {
+        for (const s of rows) {
+            try {
+                insertOrIgnoreStudent.run({
+                    id: s.id, email: (s.email || '').toLowerCase(),
+                    student_id: s.id, name: s.name || '',
+                    active: s.active === '0' ? 0 : 1,
+                    allowed_videos: s.allowedVideos || '*',
+                    device_id: s.deviceId || null,
+                    created_at: s.createdAt || new Date().toISOString(),
+                    last_login: s.lastLogin || null,
+                });
+            } catch {}
+        }
+    });
+
+    const txCourses = db.transaction((rows) => {
+        for (const c of rows) {
+            try {
+                insertOrIgnoreCourse.run({
+                    id: c.id, name: c.name || '', author: c.author || '',
+                    sort_order: 0, created_at: c.createdAt || new Date().toISOString(),
+                });
+            } catch {}
+        }
+    });
+
+    const txModules = db.transaction((rows) => {
+        for (const m of rows) {
+            try {
+                insertOrIgnoreModule.run({
+                    id: m.id, course_id: m.courseId || '', parent_id: m.parentId || null,
+                    name: m.name || '', sort_order: parseInt(m.sortOrder) || 0,
+                    created_at: m.createdAt || new Date().toISOString(),
+                });
+                // Asociar video al módulo si existe
+                if (m.videoId) {
+                    db.prepare('UPDATE catalog SET module_id = ? WHERE video_id = ? AND module_id IS NULL').run(m.id, m.videoId);
+                    db.prepare('UPDATE modules SET video_id = ? WHERE id = ?').run(m.videoId, m.id);
+                }
+            } catch {}
+        }
+    });
+
+    const txVideos = db.transaction((rows) => {
+        for (const v of rows) {
+            try {
+                insertOrIgnoreVideo.run({
+                    video_id: v.videoId, title: v.title || '',
+                    status: v.status || 'ready',
+                    segment_count: 0, key_id: null, error: null,
+                    uploaded_at: v.uploadedAt || new Date().toISOString(),
+                    source_type: 'bunny', bunny_url: null,
+                    course_id: v.courseId || null,
+                    sort_order: parseInt(v.sortOrder) || 0,
+                    module_id: v.moduleId || null,
+                });
+            } catch {}
+        }
+    });
+
+    let loaded = { students: 0, courses: 0, modules: 0, videos: 0 };
+    try { txStudents(students); loaded.students = students.length; } catch {}
+    try { txCourses(courses);   loaded.courses  = courses.length;  } catch {}
+    try { txModules(modules);   loaded.modules  = modules.length;  } catch {}
+    try { txVideos(catalog);    loaded.videos   = catalog.length;  } catch {}
+
+    console.log(`[db] hydrateFromSheets: ${loaded.students} alumnos, ${loaded.courses} cursos, ${loaded.modules} módulos, ${loaded.videos} videos`);
+    return loaded;
+};
+

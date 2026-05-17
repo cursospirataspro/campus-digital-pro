@@ -43,6 +43,7 @@ const { generateFingerprint, buildWatermarkText } = require('./watermark-manager
 const { getPresignedUrl, listFiles, LOCAL_MODE } = require('./storage');
 const { processVideo }                       = require('./hls-processor');
 const db = require('./database');
+const sheets = require('./sheets-sync');
 const https = require('https');
 const http  = require('http');
 
@@ -579,7 +580,7 @@ app.get('/api/video/:videoId/play', requireAuth, async (req, res) => {
         db.createSession(sessionId, req.user.sub, videoId);
 
         // Registrar la entrega en el log de auditoría (deviceId en lugar de IP)
-        db.logDelivery({
+        const evtData = {
             userId: req.user.sub,
             videoId,
             fingerprint,
@@ -587,7 +588,9 @@ app.get('/api/video/:videoId/play', requireAuth, async (req, res) => {
             studentEmail: req.user.studentEmail || '',
             ip: req.ip,
             userAgent: req.headers['user-agent'],
-        });
+        };
+        db.logDelivery(evtData);
+        sheets.appendEvent({ ...evtData, eventType: 'delivery' });
 
         // Token de medios de corta duración
         const mediaToken = jwt.sign(
@@ -866,7 +869,7 @@ app.post('/api/catalog/restore-bulk', requireAdmin, (req, res) => {
         const existing = db.getCatalogById(v.videoId);
         if (existing) { skipped++; continue; }
         try {
-            db.addToCatalog({
+            const entry = {
                 videoId:    v.videoId,
                 title:      (v.title || v.videoId).slice(0, 120),
                 status:     'ready',
@@ -876,7 +879,9 @@ app.post('/api/catalog/restore-bulk', requireAdmin, (req, res) => {
                 courseId:   v.courseId || null,
                 sortOrder:  v.sortOrder || 0,
                 uploadedAt: v.uploadedAt || new Date().toISOString(),
-            });
+            };
+            db.addToCatalog(entry);
+            sheets.saveVideo(entry);
             inserted++;
         } catch { skipped++; }
     }
@@ -964,6 +969,7 @@ app.post('/api/courses', requireAdmin, (req, res) => {
     if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name requerido' });
     const id = uuidv4();
     const course = db.createCourse({ id, name: name.trim().slice(0, 120), author: (author || '').trim().slice(0, 100) });
+    sheets.saveCourse(course);
     res.status(201).json(course);
 });
 
@@ -977,7 +983,8 @@ app.post('/api/courses/restore-bulk', requireAdmin, (req, res) => {
         try {
             const existing = db.getCourseById(c.id);
             if (existing) { skipped++; continue; }
-            db.createCourse({ id: c.id, name: c.name.slice(0, 120), author: (c.author || '').slice(0, 100) });
+            const created = db.createCourse({ id: c.id, name: c.name.slice(0, 120), author: (c.author || '').slice(0, 100) });
+            sheets.saveCourse(created);
             inserted++;
         } catch { skipped++; }
     }
@@ -1023,6 +1030,7 @@ app.put('/api/courses/:id', requireAdmin, (req, res) => {
     if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name requerido' });
     const course = db.updateCourse(req.params.id, { name: name.trim().slice(0, 120), author: (author || '').trim().slice(0, 100) });
     if (!course) return res.status(404).json({ error: 'Curso no encontrado' });
+    sheets.saveCourse(course);
     res.json(course);
 });
 
@@ -1099,6 +1107,7 @@ app.post('/api/courses/:id/modules', requireAdmin, (req, res) => {
     if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name requerido' });
     const id = uuidv4();
     const mod = db.createModule({ id, courseId: req.params.id, parentId: parentId || null, name, sortOrder: sortOrder || 0 });
+    sheets.saveModule(mod);
     res.status(201).json(mod);
 });
 
@@ -1108,6 +1117,7 @@ app.put('/api/modules/:id', requireAdmin, (req, res) => {
     if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name requerido' });
     const mod = db.updateModule(req.params.id, { name, sortOrder: sortOrder || 0 });
     if (!mod) return res.status(404).json({ error: 'Módulo no encontrado' });
+    sheets.saveModule(mod);
     res.json(mod);
 });
 
@@ -1465,6 +1475,7 @@ app.post('/api/students', requireAdmin, (req, res) => {
         allowedVideos: Array.isArray(allowedVideos) ? allowedVideos : ['*'],
         createdAt: new Date().toISOString(),
     });
+    sheets.saveStudent(student);
     res.status(201).json({ student });
 });
 
@@ -1472,6 +1483,7 @@ app.put('/api/students/:id', requireAdmin, (req, res) => {
     const { name, active, allowedVideos, studentId, resetDevice } = req.body || {};
     const updated = db.updateStudent(req.params.id, { name, active, allowedVideos, studentId, resetDevice });
     if (!updated) return res.status(404).json({ error: 'Alumno no encontrado' });
+    sheets.saveStudent(updated);
     res.json({ student: updated });
 });
 
@@ -2636,20 +2648,28 @@ setInterval(() => {
     db.cleanOldPlaybackDedupe();
 }, 60_000);
 
-app.listen(PORT, () => {
-    console.log('');
-    console.log('=========================================');
-    console.log('  Reproductor DRM — Servidor iniciado');
-    console.log(`  Reproductor: http://localhost:${PORT}`);
-    console.log(`  Admin panel: http://localhost:${PORT}/admin`);
-    console.log(`  Modo: ${LOCAL_MODE ? 'LOCAL (sin B2)' : 'Backblaze B2'}`);
-    console.log('');
-    console.log('  Credenciales admin:');
-    console.log(`  Usuario: ${process.env.ADMIN_USER}`);
-    console.log(`  Password: ${process.env.ADMIN_PASS}`);
-    console.log('=========================================');
-    console.log('');
-});
+// Inicializar Google Sheets y restaurar datos persistentes ANTES de escuchar
+(async () => {
+    const sheetsOk = await sheets.init();
+    if (sheetsOk) {
+        const data = await sheets.hydrate();
+        if (data) db.hydrateFromSheets(data);
+    }
+    app.listen(PORT, () => {
+        console.log('');
+        console.log('=========================================');
+        console.log('  Reproductor DRM — Servidor iniciado');
+        console.log(`  Reproductor: http://localhost:${PORT}`);
+        console.log(`  Admin panel: http://localhost:${PORT}/admin`);
+        console.log(`  Modo: ${LOCAL_MODE ? 'LOCAL (sin B2)' : 'Backblaze B2'}`);
+        console.log('');
+        console.log('  Credenciales admin:');
+        console.log(`  Usuario: ${process.env.ADMIN_USER}`);
+        console.log(`  Password: ${process.env.ADMIN_PASS}`);
+        console.log('=========================================');
+        console.log('');
+    });
+})();
 
 // ================================================================
 //  PLAYER TOKEN — Base44 u otro campus llama este endpoint
