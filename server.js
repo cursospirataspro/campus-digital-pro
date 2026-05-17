@@ -1862,7 +1862,7 @@ app.get('/api/b/:videoId/:segname', (req, res) => {
  * Si el JWT expiró o la sesión no existe → { revoked: true } → cliente pausa el video.
  */
 app.post('/api/session/heartbeat', (req, res) => {
-    const { sessionId, mediaToken, currentTime } = req.body || {};
+    const { sessionId, mediaToken, currentTime, durationSecs, wallSecs, speedMax } = req.body || {};
     if (!sessionId || !mediaToken) {
         return apiError(res, 400, 'BAD_REQUEST', 'sessionId y mediaToken requeridos');
     }
@@ -1906,6 +1906,22 @@ app.post('/api/session/heartbeat', (req, res) => {
             error: { code: 'SESSION_NOT_FOUND', message: 'La sesión ya no existe o expiró', details: null, ts: new Date().toISOString() },
         });
     }
+
+    // Auditoría: actualizar progreso si el reproductor envía métricas de reproducción
+    if (durationSecs > 0) {
+        try {
+            db.upsertPlaybackProgress({
+                sessionId,
+                userId:       tokenPayload.sub || tokenPayload.studentId || '',
+                videoId:      tokenPayload.videoId || '',
+                durationSecs: parseInt(durationSecs) || 0,
+                positionSecs: parseInt(currentTime)  || 0,
+                wallSecs:     parseInt(wallSecs)      || 0,
+                speedMax:     parseFloat(speedMax)    || 1.0,
+            });
+        } catch {}
+    }
+
     res.json({ ok: true });
 });
 
@@ -1913,10 +1929,39 @@ app.post('/api/session/heartbeat', (req, res) => {
  * POST /api/session/end
  * El reproductor avisa al servidor que terminó la reproducción.
  * Libera el slot de sesión para que el alumno pueda abrir otra pestaña.
+ * Acepta métricas finales de reproducción y ejecuta análisis de auditoría.
  */
 app.post('/api/session/end', (req, res) => {
-    const { sessionId } = req.body || {};
-    if (sessionId) db.endSession(sessionId);
+    const { sessionId, durationSecs, positionSecs, wallSecs, speedMax, videoId } = req.body || {};
+    if (sessionId) {
+        // Guardar progreso final antes de eliminar la sesión
+        if (durationSecs > 0) {
+            try {
+                // Recuperar userId del token si viene en header, o de la sesión activa
+                const auth  = req.headers['authorization'] || '';
+                const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+                let userId  = '';
+                let vid     = videoId || '';
+                if (token) {
+                    try {
+                        const p = jwt.verify(token, JWT_SECRET);
+                        userId  = p.sub || '';
+                        vid     = vid || p.videoId || '';
+                    } catch {}
+                }
+                db.upsertPlaybackProgress({
+                    sessionId, userId, videoId: vid,
+                    durationSecs: parseInt(durationSecs) || 0,
+                    positionSecs: parseInt(positionSecs) || 0,
+                    wallSecs:     parseInt(wallSecs)     || 0,
+                    speedMax:     parseFloat(speedMax)   || 1.0,
+                });
+                // Analizar sesión y generar flag si hay anomalía
+                db.analyzeSession(sessionId);
+            } catch {}
+        }
+        db.endSession(sessionId);
+    }
     res.json({ ok: true });
 });
 
@@ -1996,8 +2041,56 @@ app.get('/api/audit/log', requireAdmin, (req, res) => {
 });
 
 // ================================================================
-//  ARCHIVOS ESTÁTICOS
+//  RUTAS: PANEL AUDITORÍA REPRODUCTOR [ADMIN]
 // ================================================================
+
+/**
+ * GET /api/admin/audit-flags
+ * Devuelve los flags del sistema de auditoría del reproductor.
+ * Query params: status (new|reviewed|false_positive|observacion), limit (max 500)
+ */
+app.get('/api/admin/audit-flags', requireAdmin, (req, res) => {
+    const status = req.query.status || null;
+    const limit  = Math.min(parseInt(req.query.limit || '200', 10), 500);
+    const flags  = db.getAuditFlags({ status: status || undefined, limit });
+    res.json({ ok: true, flags, total: flags.length });
+});
+
+/**
+ * PATCH /api/admin/audit-flags/:id
+ * Actualiza el estado de un flag (revisado, falso positivo, en observación + nota).
+ * Body: { status: 'reviewed'|'false_positive'|'observacion'|'new', note: '...' }
+ */
+app.patch('/api/admin/audit-flags/:id', requireAdmin, (req, res) => {
+    const id     = parseInt(req.params.id, 10);
+    const { status, note } = req.body || {};
+    const allowed = ['new', 'reviewed', 'false_positive', 'observacion'];
+    if (!allowed.includes(status)) {
+        return res.status(400).json({ ok: false, error: 'status inválido' });
+    }
+    const updated = db.updateAuditFlag(id, { status, note: (note || '').slice(0, 1000) });
+    if (!updated) return res.status(404).json({ ok: false, error: 'Flag no encontrado' });
+    res.json({ ok: true, flag: updated });
+});
+
+/**
+ * GET /api/admin/audit-flags/summary
+ * Resumen de flags por alumno y por tipo — para el encabezado del panel.
+ */
+app.get('/api/admin/audit-flags/summary', requireAdmin, (req, res) => {
+    const flags    = db.getAuditFlags({ limit: 2000 });
+    const byStatus = {};
+    const byType   = {};
+    const byUser   = {};
+    for (const f of flags) {
+        byStatus[f.status]   = (byStatus[f.status]   || 0) + 1;
+        byType[f.flagType]   = (byType[f.flagType]   || 0) + 1;
+        byUser[f.email]      = (byUser[f.email]      || 0) + 1;
+    }
+    res.json({ ok: true, total: flags.length, byStatus, byType, byUser });
+});
+
+
 
 // Servir segmentos HLS locales (los .ts están cifrados, la clave requiere auth)
 if (LOCAL_MODE) {

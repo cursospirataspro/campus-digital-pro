@@ -122,10 +122,61 @@ CREATE TABLE IF NOT EXISTS app_config (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL DEFAULT ''
 );
+
+-- ================================================================
+--  AUDITORÍA DEL REPRODUCTOR
+-- ================================================================
+
+-- Progreso real de reproducción por alumno+video
+CREATE TABLE IF NOT EXISTS playback_progress (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      TEXT NOT NULL,
+    video_id     TEXT NOT NULL,
+    session_id   TEXT NOT NULL,
+    duration_secs INTEGER NOT NULL DEFAULT 0,
+    position_secs INTEGER NOT NULL DEFAULT 0,
+    wall_secs    INTEGER NOT NULL DEFAULT 0,
+    speed_max    REAL    NOT NULL DEFAULT 1.0,
+    updated_at   TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pp_user_video ON playback_progress(user_id, video_id);
+CREATE INDEX IF NOT EXISTS idx_pp_session    ON playback_progress(session_id);
+
+-- Registro de solicitudes HLS por sesión
+CREATE TABLE IF NOT EXISTS hls_requests (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id   TEXT NOT NULL,
+    user_id      TEXT NOT NULL,
+    video_id     TEXT NOT NULL,
+    req_type     TEXT NOT NULL DEFAULT 'segment',
+    requested_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_hls_session ON hls_requests(session_id);
+CREATE INDEX IF NOT EXISTS idx_hls_user    ON hls_requests(user_id, video_id);
+
+-- Flags de auditoría para revisión manual
+CREATE TABLE IF NOT EXISTS audit_flags (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      TEXT NOT NULL,
+    video_id     TEXT NOT NULL,
+    email        TEXT NOT NULL DEFAULT '',
+    course_id    TEXT,
+    flag_type    TEXT NOT NULL,
+    factor       REAL NOT NULL DEFAULT 0,
+    details      TEXT NOT NULL DEFAULT '{}',
+    status       TEXT NOT NULL DEFAULT 'new',
+    note         TEXT NOT NULL DEFAULT '',
+    created_at   TEXT NOT NULL,
+    reviewed_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_flags_user   ON audit_flags(user_id);
+CREATE INDEX IF NOT EXISTS idx_flags_video  ON audit_flags(video_id);
+CREATE INDEX IF NOT EXISTS idx_flags_status ON audit_flags(status);
 `);
 
 // Migraciones para DBs existentes (en BD nueva ya vienen en el CREATE TABLE)
 try { db.exec('ALTER TABLE active_sessions ADD COLUMN current_time INTEGER NOT NULL DEFAULT 0'); } catch {}
+try { db.exec('ALTER TABLE catalog ADD COLUMN duration_secs INTEGER NOT NULL DEFAULT 0'); } catch {}
 
 // ================================================================
 //  STATEMENTS PREPARADOS (más rápidos que queries ad-hoc)
@@ -889,4 +940,200 @@ module.exports.getSessionsByUser = (userId) => _qAllSessions.all(userId);
 module.exports.cleanOldPlaybackDedupe = () => {
     const threshold = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
     pbStmts.deleteOldDedupe.run(threshold);
+};
+
+// ================================================================
+//  AUDITORÍA DEL REPRODUCTOR — statements y funciones
+// ================================================================
+
+const auditStmts = {
+    // playback_progress
+    upsertProgress: db.prepare(`
+        INSERT INTO playback_progress (user_id, video_id, session_id, duration_secs, position_secs, wall_secs, speed_max, updated_at)
+        VALUES (@user_id, @video_id, @session_id, @duration_secs, @position_secs, @wall_secs, @speed_max, @updated_at)
+        ON CONFLICT(id) DO NOTHING
+    `),
+    updateProgress: db.prepare(`
+        UPDATE playback_progress
+        SET duration_secs = MAX(duration_secs, @duration_secs),
+            position_secs = MAX(position_secs, @position_secs),
+            wall_secs     = MAX(wall_secs,     @wall_secs),
+            speed_max     = MAX(speed_max,     @speed_max),
+            updated_at    = @updated_at
+        WHERE session_id = @session_id
+    `),
+    getProgressBySession: db.prepare('SELECT * FROM playback_progress WHERE session_id = ? LIMIT 1'),
+    getProgressByUserVideo: db.prepare('SELECT * FROM playback_progress WHERE user_id = ? AND video_id = ? ORDER BY updated_at DESC'),
+    getAllProgressByUser:  db.prepare('SELECT * FROM playback_progress WHERE user_id = ? ORDER BY updated_at DESC'),
+
+    // hls_requests
+    insertHlsReq: db.prepare('INSERT INTO hls_requests (session_id, user_id, video_id, req_type, requested_at) VALUES (?, ?, ?, ?, ?)'),
+    countHlsReqs: db.prepare('SELECT COUNT(*) as n, MIN(requested_at) as first_req, MAX(requested_at) as last_req FROM hls_requests WHERE session_id = ? AND req_type = ?'),
+    countHlsWindow: db.prepare('SELECT COUNT(*) as n FROM hls_requests WHERE session_id = ? AND requested_at > ?'),
+
+    // audit_flags
+    insertFlag: db.prepare(`
+        INSERT INTO audit_flags (user_id, video_id, email, course_id, flag_type, factor, details, status, note, created_at)
+        VALUES (@user_id, @video_id, @email, @course_id, @flag_type, @factor, @details, 'new', '', @created_at)
+    `),
+    getAllFlags:    db.prepare(`
+        SELECT f.*, c.title as video_title, co.name as course_name
+        FROM audit_flags f
+        LEFT JOIN catalog c  ON c.video_id  = f.video_id
+        LEFT JOIN courses co ON co.id        = f.course_id
+        ORDER BY f.created_at DESC
+        LIMIT ?
+    `),
+    getFlagsByStatus: db.prepare(`
+        SELECT f.*, c.title as video_title, co.name as course_name
+        FROM audit_flags f
+        LEFT JOIN catalog c  ON c.video_id  = f.video_id
+        LEFT JOIN courses co ON co.id        = f.course_id
+        WHERE f.status = ?
+        ORDER BY f.created_at DESC
+        LIMIT ?
+    `),
+    updateFlagStatus: db.prepare('UPDATE audit_flags SET status = ?, note = ?, reviewed_at = ? WHERE id = ?'),
+    getFlag:          db.prepare('SELECT * FROM audit_flags WHERE id = ?'),
+
+    // catalog duration
+    updateDuration: db.prepare('UPDATE catalog SET duration_secs = ? WHERE video_id = ? AND duration_secs < ?'),
+};
+
+/**
+ * Registra / actualiza el progreso de reproducción de una sesión.
+ * Llamado por el heartbeat y por /api/session/progress
+ */
+module.exports.upsertPlaybackProgress = ({ sessionId, userId, videoId, durationSecs, positionSecs, wallSecs, speedMax }) => {
+    const now = new Date().toISOString();
+    const existing = auditStmts.getProgressBySession.get(sessionId);
+    if (!existing) {
+        auditStmts.upsertProgress.run({
+            user_id: userId, video_id: videoId, session_id: sessionId,
+            duration_secs: durationSecs || 0, position_secs: positionSecs || 0,
+            wall_secs: wallSecs || 0, speed_max: speedMax || 1.0, updated_at: now,
+        });
+    } else {
+        auditStmts.updateProgress.run({
+            session_id: sessionId,
+            duration_secs: durationSecs || 0, position_secs: positionSecs || 0,
+            wall_secs: wallSecs || 0, speed_max: speedMax || 1.0, updated_at: now,
+        });
+    }
+    // actualizar duración en catalog si es mayor
+    if (durationSecs > 0) {
+        auditStmts.updateDuration.run(durationSecs, videoId, durationSecs);
+    }
+};
+
+/** Registra una solicitud HLS (manifest o segment) */
+module.exports.logHlsRequest = (sessionId, userId, videoId, reqType) => {
+    try { auditStmts.insertHlsReq.run(sessionId, userId, videoId, reqType || 'segment', Date.now()); } catch {}
+};
+
+/**
+ * Analiza una sesión al terminar y genera flags de auditoría si hay anomalías.
+ * MAX_SPEED = 2.0 (velocidad máxima permitida por el reproductor)
+ */
+const MAX_SPEED = 2.0;
+
+module.exports.analyzeSession = (sessionId) => {
+    const prog = auditStmts.getProgressBySession.get(sessionId);
+    if (!prog || prog.duration_secs <= 0 || prog.wall_secs <= 0) return null;
+
+    const durationSecs = prog.duration_secs;
+    const wallSecs     = prog.wall_secs;
+    const positionSecs = prog.position_secs;
+    const minTime      = durationSecs / MAX_SPEED; // tiempo mínimo razonable
+
+    const percentWatched = Math.min(100, Math.round((positionSecs / durationSecs) * 100));
+    const factor         = parseFloat((durationSecs / wallSecs).toFixed(2));
+
+    let flagType = null;
+    if (factor > MAX_SPEED * 1.5) {
+        flagType = 'posible_grabacion_acelerada'; // ej: completó 1h en 12min → factor 5x
+    } else if (percentWatched >= 90 && wallSecs < minTime * 0.7) {
+        flagType = 'consumo_rapido'; // vio +90% pero en menos del 70% del tiempo mínimo
+    }
+
+    // HLS bulk: muchos segmentos pedidos muy rápido
+    const hlsStats   = auditStmts.countHlsReqs.get(sessionId, 'segment');
+    const segCount   = hlsStats?.n || 0;
+    const hlsWindow  = (hlsStats?.last_req - hlsStats?.first_req) || 0; // ms
+    if (segCount > 20 && hlsWindow > 0 && hlsWindow < wallSecs * 1000 * 0.3) {
+        // más de 20 segmentos pedidos en menos del 30% del tiempo real
+        flagType = 'posible_extraccion_hls';
+    }
+
+    if (!flagType) return null; // reproducción normal
+
+    const student = db.prepare('SELECT email, allowed_videos FROM students WHERE id = ?').get(prog.user_id);
+    const video   = db.prepare('SELECT course_id FROM catalog WHERE video_id = ?').get(prog.video_id);
+
+    auditStmts.insertFlag.run({
+        user_id:    prog.user_id,
+        video_id:   prog.video_id,
+        email:      student?.email || '',
+        course_id:  video?.course_id || null,
+        flag_type:  flagType,
+        factor,
+        details:    JSON.stringify({
+            durationSecs, wallSecs, positionSecs, percentWatched,
+            factor, segCount, hlsWindowMs: hlsWindow, minTimeSecs: Math.round(minTime),
+        }),
+        created_at: new Date().toISOString(),
+    });
+
+    return flagType;
+};
+
+/** Devuelve todos los flags (con join de título de video y nombre de curso) */
+module.exports.getAuditFlags = ({ status, limit = 200 } = {}) => {
+    const rows = status
+        ? auditStmts.getFlagsByStatus.all(status, limit)
+        : auditStmts.getAllFlags.all(limit);
+    return rows.map(r => ({
+        id:          r.id,
+        userId:      r.user_id,
+        videoId:     r.video_id,
+        email:       r.email,
+        courseId:    r.course_id,
+        videoTitle:  r.video_title || r.video_id,
+        courseName:  r.course_name || '—',
+        flagType:    r.flag_type,
+        factor:      r.factor,
+        details:     (() => { try { return JSON.parse(r.details); } catch { return {}; } })(),
+        status:      r.status,
+        note:        r.note,
+        createdAt:   r.created_at,
+        reviewedAt:  r.reviewed_at || null,
+    }));
+};
+
+/** Actualiza estado de un flag (revisado, falso positivo, en observación, nota) */
+module.exports.updateAuditFlag = (id, { status, note }) => {
+    auditStmts.updateFlagStatus.run(
+        status || 'reviewed',
+        note   || '',
+        new Date().toISOString(),
+        id,
+    );
+    return auditStmts.getFlag.get(id);
+};
+
+/** Estadísticas diarias por alumno — cuánto contenido consumió hoy */
+module.exports.getDailyStats = (userId, dateStr) => {
+    const dayStart = new Date(dateStr + 'T00:00:00.000Z').toISOString();
+    const dayEnd   = new Date(dateStr + 'T23:59:59.999Z').toISOString();
+    return db.prepare(`
+        SELECT pp.video_id, c.title, c.course_id, c.duration_secs,
+               MAX(pp.position_secs) as position_secs,
+               SUM(pp.wall_secs)     as wall_secs_total,
+               ROUND(MAX(pp.position_secs) * 100.0 / NULLIF(c.duration_secs, 0)) as percent
+        FROM playback_progress pp
+        LEFT JOIN catalog c ON c.video_id = pp.video_id
+        WHERE pp.user_id = ? AND pp.updated_at >= ? AND pp.updated_at <= ?
+        GROUP BY pp.video_id
+        ORDER BY pp.updated_at DESC
+    `).all(userId, dayStart, dayEnd);
 };

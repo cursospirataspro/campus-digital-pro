@@ -362,6 +362,7 @@
             <a data-page="catalog">Catalogo</a>
             <a data-page="students">Alumnos</a>
             <a data-page="audit">Auditoria</a>
+            <a data-page="playaudit">Auditoría Reproductor</a>
             <a data-page="leak">Detectar Fuga</a>
         </nav>
         <div class="sidebar-bottom">
@@ -803,6 +804,71 @@
         </div>
 
         <!-- ---- DETECTAR FUGA ---- -->
+        <!-- ---- AUDITORÍA REPRODUCTOR ---- -->
+        <div class="page" id="page-playaudit">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+                <h2 style="margin-bottom:0">Auditoría del Reproductor</h2>
+                <div style="display:flex;align-items:center;gap:8px">
+                    <select id="pa-filter-status" onchange="loadAuditFlags()" style="background:var(--c-surface2);border:1px solid var(--c-border);color:var(--c-text);border-radius:6px;padding:6px 10px;font-size:0.82rem">
+                        <option value="">Todos los estados</option>
+                        <option value="new">Sin revisar</option>
+                        <option value="observacion">En observación</option>
+                        <option value="reviewed">Revisado</option>
+                        <option value="false_positive">Falso positivo</option>
+                    </select>
+                    <button class="btn-gear" onclick="loadAuditFlags()">&#8635; Actualizar</button>
+                </div>
+            </div>
+            <p class="subtitle">Detección automática de consumo anómalo, extracción HLS y grabación acelerada.</p>
+
+            <!-- Stats bar -->
+            <div class="stats-grid" id="pa-stats-grid">
+                <div class="stat-card"><div class="num" id="pa-total">—</div><div class="lbl">Total alertas</div></div>
+                <div class="stat-card"><div class="num" id="pa-new">—</div><div class="lbl">Sin revisar</div></div>
+                <div class="stat-card"><div class="num" id="pa-observacion">—</div><div class="lbl">En observación</div></div>
+                <div class="stat-card"><div class="num" id="pa-false-positive">—</div><div class="lbl">Falsos positivos</div></div>
+            </div>
+
+            <!-- Tabla de flags -->
+            <div class="card">
+                <div class="table-wrap">
+                    <table id="pa-table">
+                        <thead>
+                            <tr>
+                                <th>Email</th>
+                                <th>Video</th>
+                                <th>Curso</th>
+                                <th>Tipo alerta</th>
+                                <th>Factor</th>
+                                <th>% Visto</th>
+                                <th>T. Real</th>
+                                <th>Duración</th>
+                                <th>Estado</th>
+                                <th>Fecha</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody id="pa-body">
+                            <tr><td colspan="11" style="color:var(--c-muted);text-align:center">Cargando...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Modal nota -->
+            <div id="pa-note-modal" style="display:none;position:fixed;inset:0;z-index:500;background:rgba(0,0,0,0.7);align-items:center;justify-content:center">
+                <div style="background:var(--c-surface);border:1px solid var(--c-border);border-radius:12px;padding:24px;width:420px;max-width:95vw">
+                    <h3 style="margin-bottom:12px">Agregar / editar nota</h3>
+                    <input type="hidden" id="pa-note-id">
+                    <textarea id="pa-note-text" rows="4" style="width:100%;background:var(--c-surface2);border:1px solid var(--c-border);color:var(--c-text);border-radius:6px;padding:8px;font-size:0.85rem;resize:vertical"></textarea>
+                    <div style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end">
+                        <button onclick="document.getElementById('pa-note-modal').style.display='none'" style="background:none;border:1px solid var(--c-border);color:var(--c-muted);border-radius:6px;padding:6px 14px;cursor:pointer">Cancelar</button>
+                        <button class="btn" onclick="saveAuditNote()">Guardar nota</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div class="page" id="page-leak">
             <h2>Detectar Fuga</h2>
             <p class="subtitle">Ingresa el fingerprint visible en un video filtrado para identificar al responsable.</p>
@@ -975,10 +1041,11 @@ document.querySelectorAll('nav a').forEach(a => {
         document.querySelectorAll('.page').forEach(x => x.classList.remove('active'));
         a.classList.add('active');
         $('page-' + a.dataset.page).classList.add('active');
-        if (a.dataset.page === 'catalog')   loadCatalog();
-        if (a.dataset.page === 'audit')     loadAudit();
-        if (a.dataset.page === 'dashboard') loadDashboard();
-        if (a.dataset.page === 'students')  loadStudents();
+        if (a.dataset.page === 'catalog')    loadCatalog();
+        if (a.dataset.page === 'audit')      loadAudit();
+        if (a.dataset.page === 'dashboard')  loadDashboard();
+        if (a.dataset.page === 'students')   loadStudents();
+        if (a.dataset.page === 'playaudit')  loadAuditFlags();
     });
 });
 
@@ -2279,6 +2346,137 @@ async function loadAudit() {
 
 // ================================================================
 //  DETECTAR FUGA
+// ================================================================
+// ================================================================
+//  AUDITORÍA DEL REPRODUCTOR
+// ================================================================
+
+const PA_FLAG_LABELS = {
+    consumo_rapido:             { label: 'Consumo rápido',            color: '#f59e0b' },
+    posible_grabacion_acelerada:{ label: 'Posible grab. acelerada',   color: '#dc2626' },
+    posible_extraccion_hls:     { label: 'Posible extracción HLS',    color: '#7c3aed' },
+    too_fast:                   { label: 'Muy rápido',                color: '#f59e0b' },
+    impossible_course:          { label: 'Consumo imposible',         color: '#dc2626' },
+    hls_bulk:                   { label: 'Bulk HLS',                  color: '#7c3aed' },
+    hls_no_session:             { label: 'HLS sin sesión',            color: '#6366f1' },
+    hls_rhythm:                 { label: 'Ritmo HLS anómalo',         color: '#8b5cf6' },
+    mass_open:                  { label: 'Apertura masiva',           color: '#ec4899' },
+};
+
+const PA_STATUS_LABELS = {
+    new:             { label: 'Sin revisar',    bg: '#1e3a5f', color: '#60a5fa' },
+    observacion:     { label: 'En observación', bg: '#3b2f00', color: '#fbbf24' },
+    reviewed:        { label: 'Revisado',       bg: '#052e16', color: '#4ade80' },
+    false_positive:  { label: 'Falso positivo', bg: '#1a1a1a', color: '#9ca3af' },
+};
+
+function fmtSecs(n) {
+    if (!n) return '—';
+    n = parseInt(n);
+    const h = Math.floor(n / 3600);
+    const m = Math.floor((n % 3600) / 60);
+    const s = n % 60;
+    if (h > 0) return `${h}h ${m}m`;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
+}
+
+function paStatusBadge(status) {
+    const s = PA_STATUS_LABELS[status] || { label: status, bg: '#222', color: '#ccc' };
+    return `<span style="background:${s.bg};color:${s.color};padding:2px 8px;border-radius:12px;font-size:0.75rem;font-weight:600">${esc(s.label)}</span>`;
+}
+
+function paTypeBadge(type) {
+    const t = PA_FLAG_LABELS[type] || { label: type, color: '#6b7280' };
+    return `<span style="background:${t.color}22;color:${t.color};padding:2px 8px;border-radius:12px;font-size:0.75rem;font-weight:600;border:1px solid ${t.color}44">${esc(t.label)}</span>`;
+}
+
+async function loadAuditFlags() {
+    const status = ($('pa-filter-status') || {}).value || '';
+    const tbody  = $('pa-body');
+    if (!tbody) return;
+    tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:var(--c-muted)">Cargando...</td></tr>';
+
+    try {
+        const url = '/api/admin/audit-flags' + (status ? '?status=' + encodeURIComponent(status) : '');
+        const r   = await api('GET', url);
+        const flags = r.flags || [];
+
+        // stats bar
+        const byStatus = {};
+        for (const f of flags) byStatus[f.status] = (byStatus[f.status] || 0) + 1;
+        $('pa-total').textContent       = flags.length;
+        $('pa-new').textContent         = byStatus.new         || 0;
+        $('pa-observacion').textContent = byStatus.observacion || 0;
+        $('pa-false-positive').textContent = byStatus.false_positive || 0;
+
+        if (!flags.length) {
+            tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:var(--c-muted)">No hay alertas para este filtro.</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = flags.map(f => {
+            const d      = f.details || {};
+            const pct    = d.percentWatched != null ? d.percentWatched + '%' : '—';
+            const wall   = fmtSecs(d.wallSecs);
+            const dur    = fmtSecs(d.durationSecs);
+            const factor = (f.factor != null) ? parseFloat(f.factor).toFixed(2) + 'x' : '—';
+            const dt     = f.createdAt ? new Date(f.createdAt).toLocaleString('es', {dateStyle:'short',timeStyle:'short'}) : '—';
+            return `<tr>
+                <td style="font-size:0.8rem">${esc(f.email || '—')}</td>
+                <td style="font-size:0.78rem;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(f.videoTitle)}">${esc(f.videoTitle)}</td>
+                <td style="font-size:0.78rem;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(f.courseName)}">${esc(f.courseName)}</td>
+                <td>${paTypeBadge(f.flagType)}</td>
+                <td style="text-align:center;font-size:0.82rem">${factor}</td>
+                <td style="text-align:center;font-size:0.82rem">${pct}</td>
+                <td style="text-align:center;font-size:0.82rem">${wall}</td>
+                <td style="text-align:center;font-size:0.82rem">${dur}</td>
+                <td>${paStatusBadge(f.status)}</td>
+                <td style="font-size:0.75rem;color:var(--c-muted)">${dt}</td>
+                <td>
+                    <div style="display:flex;gap:4px;flex-wrap:wrap">
+                        <button onclick="setAuditStatus(${f.id},'reviewed')"    style="background:#052e16;color:#4ade80;border:none;border-radius:4px;padding:3px 7px;font-size:0.72rem;cursor:pointer">✓ OK</button>
+                        <button onclick="setAuditStatus(${f.id},'false_positive')" style="background:#1a1a1a;color:#9ca3af;border:none;border-radius:4px;padding:3px 7px;font-size:0.72rem;cursor:pointer">FP</button>
+                        <button onclick="setAuditStatus(${f.id},'observacion')"  style="background:#3b2f00;color:#fbbf24;border:none;border-radius:4px;padding:3px 7px;font-size:0.72rem;cursor:pointer">👁</button>
+                        <button onclick="openAuditNote(${f.id},'${esc(f.note||'').replace(/'/g,"\\'")}')" style="background:#1e1e2e;color:#818cf8;border:1px solid #334155;border-radius:4px;padding:3px 7px;font-size:0.72rem;cursor:pointer">📝</button>
+                    </div>
+                </td>
+            </tr>`;
+        }).join('');
+    } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="11" style="color:var(--c-error);text-align:center">Error: ${esc(err.message)}</td></tr>`;
+    }
+}
+
+async function setAuditStatus(id, status) {
+    try {
+        await api('PATCH', '/api/admin/audit-flags/' + id, { status, note: '' });
+        loadAuditFlags();
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
+function openAuditNote(id, currentNote) {
+    $('pa-note-id').value   = id;
+    $('pa-note-text').value = currentNote || '';
+    $('pa-note-modal').style.display = 'flex';
+}
+
+async function saveAuditNote() {
+    const id   = parseInt($('pa-note-id').value, 10);
+    const note = $('pa-note-text').value.trim();
+    try {
+        await api('PATCH', '/api/admin/audit-flags/' + id, { status: 'observacion', note });
+        $('pa-note-modal').style.display = 'none';
+        loadAuditFlags();
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
+// ================================================================
+//  DETECT LEAK
 // ================================================================
 async function detectLeak() {
     const fp = $('fp-input').value.trim().toLowerCase();
