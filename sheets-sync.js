@@ -66,12 +66,10 @@ async function init() {
     }
     try {
         const creds = JSON.parse(SA_JSON);
-        const auth  = new google.auth.JWT(
-            creds.client_email,
-            null,
-            creds.private_key,
-            ['https://www.googleapis.com/auth/spreadsheets'],
-        );
+        const auth  = new google.auth.GoogleAuth({
+            credentials: creds,
+            scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+        });
         _api = google.sheets({ version: 'v4', auth });
         await _ensureTabs();
         _ready = true;
