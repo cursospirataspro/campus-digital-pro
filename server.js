@@ -258,8 +258,15 @@ async function maybeWeeklyBackup() {
     if (!pgStore.isReady() || _weeklyRunning) return;
     _weeklyRunning = true;
     try {
-        const last   = await pgStore.getConfig('last_weekly_backup_at');
-        const lastMs = last ? Date.parse(last) : 0;
+        // Base robusta: usar la fecha de la última copia semanal REAL del historial,
+        // no solo el marcador (que podría no haberse guardado). Evita duplicados en cada deploy.
+        const list = await pgStore.listBackups(50);
+        const lastWeekly = Array.isArray(list) ? list.find(b => b.kind === 'weekly') : null;
+        const marker = await pgStore.getConfig('last_weekly_backup_at');
+        const lastMs = Math.max(
+            lastWeekly ? Date.parse(lastWeekly.created_at) : 0,
+            marker ? Date.parse(marker) : 0
+        );
         if (Date.now() - lastMs >= WEEKLY_MS) {
             const { row } = await createBackupNow('weekly');
             if (row) {
