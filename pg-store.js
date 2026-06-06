@@ -88,7 +88,7 @@ async function init() {
 }
 
 function _ok() {
-    return isEnabled() && ready && pool;
+    return !!(isEnabled() && ready && pool);
 }
 
 /** Guarda el estado completo actual (rehidratable) bajo la clave 'live'. */
