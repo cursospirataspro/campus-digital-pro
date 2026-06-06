@@ -251,6 +251,15 @@ const MAX_CONCURRENT = parseInt(process.env.MAX_CONCURRENT_SESSIONS || '1', 10);
 const RENDER_API_KEY    = process.env.RENDER_API_KEY || '';
 const RENDER_SERVICE_ID = process.env.RENDER_SERVICE_ID || '';
 
+// Evita caída total del proceso por errores no controlados en runtime.
+process.on('uncaughtException', (err) => {
+    console.error('[FATAL-RUNTIME] uncaughtException:', err?.stack || err);
+});
+
+process.on('unhandledRejection', (reason) => {
+    console.error('[FATAL-RUNTIME] unhandledRejection:', reason?.stack || reason);
+});
+
 /**
  * Resuelve la URL base pública del servidor.
  * Prioriza PUBLIC_URL del .env; si no existe, la deduce del request.
@@ -1013,6 +1022,39 @@ app.post('/api/courses/restore-bulk', requireAdmin, (req, res) => {
             if (existing) { skipped++; continue; }
             const created = db.createCourse({ id: c.id, name: c.name.slice(0, 120), author: (c.author || '').slice(0, 100) });
             sheets.saveCourse(created);
+            inserted++;
+        } catch { skipped++; }
+    }
+    res.json({ ok: true, inserted, skipped });
+});
+
+/**
+ * POST /api/audit/seed-devices  [ADMIN]
+ * Restaura asociaciones email+deviceId en audit_log tras un deploy.
+ * Acepta [{ studentEmail, deviceId }] — inserta un registro mínimo por par si no existe ya.
+ */
+app.post('/api/audit/seed-devices', requireAdmin, (req, res) => {
+    const { records } = req.body || {};
+    if (!Array.isArray(records)) return res.status(400).json({ error: 'records array requerido' });
+    let inserted = 0, skipped = 0;
+    for (const r of records) {
+        const email    = (r.studentEmail || '').slice(0, 254).trim();
+        const deviceId = (r.deviceId     || '').slice(0, 128).trim();
+        if (!email || !deviceId || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { skipped++; continue; }
+        try {
+            const fp = `seed_${Buffer.from(email + ':' + deviceId).toString('base64').slice(0, 40)}`;
+            // Verificar si ya existe un registro con este fingerprint
+            const ex = db.detectLeak(fp);
+            if (ex) { skipped++; continue; }
+            db.logDelivery({
+                fingerprint:   fp,
+                userId:        email,
+                videoId:       'restored_association',
+                deviceId:      deviceId,
+                studentEmail:  email,
+                ip:            'restored',
+                userAgent:     'restored',
+            });
             inserted++;
         } catch { skipped++; }
     }
@@ -2671,9 +2713,17 @@ app.post('/api/b44/track', (req, res) => {
 
 // Limpiar sesiones expiradas cada 60 segundos
 setInterval(() => {
-    db.cleanExpiredSessions();
-    db.cleanExpiredPlaybackSessions();
-    db.cleanOldPlaybackDedupe();
+    try {
+        db.cleanExpiredSessions();
+        if (typeof db.cleanExpiredPlaybackSessions === 'function') {
+            db.cleanExpiredPlaybackSessions();
+        }
+        if (typeof db.cleanOldPlaybackDedupe === 'function') {
+            db.cleanOldPlaybackDedupe();
+        }
+    } catch (e) {
+        console.error('[cleanup] Error limpiando sesiones:', e?.stack || e);
+    }
 }, 60_000);
 
 // Escuchar PRIMERO para que Render no mate el proceso por startup timeout.
