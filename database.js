@@ -1250,3 +1250,116 @@ module.exports.hydrateFromSheets = ({ students = [], courses = [], modules = [],
     return loaded;
 };
 
+// ================================================================
+//  APLICAR SNAPSHOT (rehidratar desde PostgreSQL / restaurar backup)
+//  Upsert completo y transaccional: sobrescribe para que los enlaces
+//  queden EXACTAMENTE iguales a la fuente (catálogo, cursos, módulos,
+//  dominios y, opcionalmente, alumnos).
+// ================================================================
+module.exports.applySnapshot = ({ catalog = [], courses = [], modules = [], domains = [], students = [] } = {}) => {
+    const upsertCourse = db.prepare(`
+        INSERT INTO courses (id, name, author, sort_order, created_at)
+        VALUES (@id, @name, @author, @sort_order, @created_at)
+        ON CONFLICT(id) DO UPDATE SET name=excluded.name, author=excluded.author, sort_order=excluded.sort_order
+    `);
+    const upsertModule = db.prepare(`
+        INSERT INTO modules (id, course_id, parent_id, name, sort_order, created_at)
+        VALUES (@id, @course_id, @parent_id, @name, @sort_order, @created_at)
+        ON CONFLICT(id) DO UPDATE SET course_id=excluded.course_id, parent_id=excluded.parent_id, name=excluded.name, sort_order=excluded.sort_order
+    `);
+    const upsertVideo = db.prepare(`
+        INSERT INTO catalog (video_id, title, status, segment_count, key_id, error, uploaded_at, source_type, bunny_url, course_id, sort_order, module_id)
+        VALUES (@video_id, @title, @status, @segment_count, @key_id, @error, @uploaded_at, @source_type, @bunny_url, @course_id, @sort_order, @module_id)
+        ON CONFLICT(video_id) DO UPDATE SET
+            title=excluded.title, status=excluded.status, segment_count=excluded.segment_count,
+            key_id=excluded.key_id, error=excluded.error, uploaded_at=excluded.uploaded_at,
+            source_type=excluded.source_type, bunny_url=excluded.bunny_url,
+            course_id=excluded.course_id, sort_order=excluded.sort_order, module_id=excluded.module_id
+    `);
+    const insertDomain  = db.prepare('INSERT OR IGNORE INTO allowed_domains (domain) VALUES (?)');
+    const upsertStudent = db.prepare(`
+        INSERT INTO students (id, email, student_id, name, active, allowed_videos, device_id, created_at, last_login)
+        VALUES (@id, @email, @student_id, @name, @active, @allowed_videos, @device_id, @created_at, @last_login)
+        ON CONFLICT(id) DO UPDATE SET email=excluded.email, name=excluded.name, active=excluded.active,
+            allowed_videos=excluded.allowed_videos
+    `);
+
+    const loaded = { courses: 0, modules: 0, videos: 0, domains: 0, students: 0 };
+
+    const tx = db.transaction(() => {
+        for (const c of courses) {
+            if (!c || !c.id) continue;
+            try {
+                upsertCourse.run({
+                    id: c.id,
+                    name: c.name || c.nombre || '',
+                    author: c.author || c.autor || '',
+                    sort_order: c.sortOrder ?? c.sort_order ?? 0,
+                    created_at: c.createdAt || c.created_at || new Date().toISOString(),
+                });
+                loaded.courses++;
+            } catch {}
+        }
+        for (const m of modules) {
+            if (!m || !m.id) continue;
+            try {
+                upsertModule.run({
+                    id: m.id,
+                    course_id: m.courseId || m.course_id || '',
+                    parent_id: m.parentId || m.parent_id || null,
+                    name: m.name || '',
+                    sort_order: m.sortOrder ?? m.sort_order ?? 0,
+                    created_at: m.createdAt || m.created_at || new Date().toISOString(),
+                });
+                loaded.modules++;
+            } catch {}
+        }
+        for (const v of catalog) {
+            const vid = v && (v.videoId || v.video_id);
+            if (!vid) continue;
+            try {
+                upsertVideo.run({
+                    video_id:      vid,
+                    title:         v.title || vid,
+                    status:        v.status || 'ready',
+                    segment_count: v.segmentCount ?? v.segment_count ?? 0,
+                    key_id:        v.keyId ?? v.key_id ?? null,
+                    error:         v.error ?? null,
+                    uploaded_at:   v.uploadedAt || v.uploaded_at || new Date().toISOString(),
+                    source_type:   v.sourceType || v.source_type || 'bunny',
+                    bunny_url:     v.bunnyUrl ?? v.bunny_url ?? null,
+                    course_id:     v.courseId ?? v.course_id ?? null,
+                    sort_order:    v.sortOrder ?? v.sort_order ?? 0,
+                    module_id:     v.moduleId ?? v.module_id ?? null,
+                });
+                loaded.videos++;
+            } catch {}
+        }
+        for (const d of domains) {
+            if (!d) continue;
+            try { insertDomain.run(typeof d === 'string' ? d : d.domain); loaded.domains++; } catch {}
+        }
+        for (const s of students) {
+            if (!s || !s.id) continue;
+            try {
+                upsertStudent.run({
+                    id: s.id,
+                    email: (s.email || '').toLowerCase(),
+                    student_id: s.studentId || s.student_id || s.id,
+                    name: s.name || '',
+                    active: (s.active === false || s.active === 0 || s.active === '0') ? 0 : 1,
+                    allowed_videos: typeof s.allowedVideos === 'string' ? s.allowedVideos
+                                    : (s.allowed_videos || (Array.isArray(s.allowedVideos) ? JSON.stringify(s.allowedVideos) : '*')),
+                    device_id: s.deviceId || s.device_id || null,
+                    created_at: s.createdAt || s.created_at || new Date().toISOString(),
+                    last_login: s.lastLogin || s.last_login || null,
+                });
+                loaded.students++;
+            } catch {}
+        }
+    });
+    try { tx(); } catch (err) { console.error('[db] applySnapshot error:', err.message); }
+    console.log(`[db] applySnapshot: ${loaded.videos} videos, ${loaded.courses} cursos, ${loaded.modules} módulos, ${loaded.domains} dominios, ${loaded.students} alumnos`);
+    return loaded;
+};
+

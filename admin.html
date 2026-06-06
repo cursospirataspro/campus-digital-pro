@@ -364,6 +364,7 @@
             <a data-page="audit">Auditoria</a>
             <a data-page="playaudit">Auditoría Reproductor</a>
             <a data-page="leak">Detectar Fuga</a>
+            <a data-page="backups">Copias de seguridad</a>
         </nav>
         <div class="sidebar-bottom">
             <div id="admin-info"></div>
@@ -903,6 +904,48 @@
                 </p>
             </div>
         </div>
+
+        <!-- ---- COPIAS DE SEGURIDAD ---- -->
+        <div class="page" id="page-backups">
+            <h2>Copias de seguridad</h2>
+            <p class="subtitle">Las copias se guardan en PostgreSQL y <strong>sobreviven a los redeploys</strong>. Se genera una copia automática cada semana.</p>
+
+            <div class="card" id="backup-status-card">
+                <div id="backup-status">Cargando estado…</div>
+            </div>
+
+            <div class="card" style="margin-top:0">
+                <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+                    <button class="btn" onclick="createBackup()" id="btn-create-backup">Crear copia ahora</button>
+                    <button class="btn" onclick="loadBackups()">Actualizar lista</button>
+                    <label class="btn" style="cursor:pointer;background:var(--c-surface2)">
+                        Restaurar desde archivo…
+                        <input type="file" accept="application/json" style="display:none" onchange="restoreFromFile(this)">
+                    </label>
+                </div>
+            </div>
+
+            <div class="card" style="margin-top:0">
+                <h3>Copias disponibles</h3>
+                <div style="overflow-x:auto">
+                    <table style="width:100%;border-collapse:collapse;font-size:0.85rem" id="backups-table">
+                        <thead>
+                            <tr style="text-align:left;color:var(--c-muted)">
+                                <th style="padding:8px">Fecha</th>
+                                <th style="padding:8px">Tipo</th>
+                                <th style="padding:8px">Etiqueta</th>
+                                <th style="padding:8px">Videos</th>
+                                <th style="padding:8px">Cursos</th>
+                                <th style="padding:8px">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody id="backups-tbody">
+                            <tr><td colspan="6" style="padding:12px;color:var(--c-muted)">—</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
     </main>
 </div>
 
@@ -1057,6 +1100,7 @@ document.querySelectorAll('nav a').forEach(a => {
         if (a.dataset.page === 'dashboard')  loadDashboard();
         if (a.dataset.page === 'students')   loadStudents();
         if (a.dataset.page === 'playaudit')  loadAuditFlags();
+        if (a.dataset.page === 'backups')    loadBackups();
     });
 });
 
@@ -1073,8 +1117,119 @@ async function api(method, path, body) {
 }
 
 // ================================================================
-//  DASHBOARD — Métricas por alumno con auto-refresh
+//  COPIAS DE SEGURIDAD (PostgreSQL)
 // ================================================================
+function fmtDate(s) {
+    if (!s) return '—';
+    const d = new Date(s);
+    return d.toLocaleString('es', { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+async function loadBackups() {
+    const statusEl = $('backup-status');
+    const tbody = $('backups-tbody');
+    statusEl.textContent = 'Cargando estado…';
+    try {
+        const d = await api('GET', '/api/admin/backups');
+        if (!d.enabled) {
+            statusEl.innerHTML = '<span style="color:#e0a800">⚠ PostgreSQL no está configurado todavía.</span><br><small style="color:var(--c-muted)">Falta la variable DATABASE_URL en Render. Cuando la agregues, las copias se activarán automáticamente.</small>';
+            tbody.innerHTML = '<tr><td colspan="6" style="padding:12px;color:var(--c-muted)">Sin PostgreSQL configurado</td></tr>';
+            return;
+        }
+        statusEl.innerHTML = '<span style="color:#34c759">✓ PostgreSQL conectado.</span> Última copia automática: <strong>' + fmtDate(d.lastWeekly) + '</strong>';
+        const list = d.backups || [];
+        if (!list.length) {
+            tbody.innerHTML = '<tr><td colspan="6" style="padding:12px;color:var(--c-muted)">Aún no hay copias. Crea una con el botón de arriba.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = list.map(b => `
+            <tr style="border-top:1px solid var(--c-border)">
+                <td style="padding:8px">${fmtDate(b.created_at)}</td>
+                <td style="padding:8px">${b.kind === 'weekly' ? '🗓 Semanal' : (b.kind === 'manual' ? '👤 Manual' : b.kind)}</td>
+                <td style="padding:8px">${(b.label || '').replace(/</g,'&lt;')}</td>
+                <td style="padding:8px">${b.total_videos}</td>
+                <td style="padding:8px">${b.total_courses}</td>
+                <td style="padding:8px;white-space:nowrap">
+                    <button class="btn" style="padding:4px 10px;font-size:0.78rem" onclick="restoreBackup(${b.id}, ${b.total_videos})">Restaurar</button>
+                    <button class="btn" style="padding:4px 10px;font-size:0.78rem;background:var(--c-surface2)" onclick="downloadBackup(${b.id})">Descargar</button>
+                    <button class="btn btn-red" style="padding:4px 10px;font-size:0.78rem" onclick="deleteBackup(${b.id})">Eliminar</button>
+                </td>
+            </tr>`).join('');
+    } catch (err) {
+        statusEl.innerHTML = '<span style="color:#ff453a">Error: ' + err.message + '</span>';
+    }
+}
+
+async function createBackup() {
+    const btn = $('btn-create-backup');
+    btn.disabled = true; btn.textContent = 'Creando…';
+    try {
+        const d = await api('POST', '/api/admin/backups', {});
+        alert('Copia creada: ' + d.backup.total_videos + ' videos, ' + d.backup.total_courses + ' cursos.');
+        loadBackups();
+    } catch (err) {
+        alert('Error creando copia: ' + err.message);
+    } finally { btn.disabled = false; btn.textContent = 'Crear copia ahora'; }
+}
+
+async function restoreBackup(id, totalVideos) {
+    if (!confirm('¿Restaurar esta copia (' + totalVideos + ' videos)?\n\nSe sobrescribirán los videos/cursos con los de la copia. Esta acción no borra videos que no estén en la copia.')) return;
+    try {
+        const d = await api('POST', '/api/admin/backups/' + id + '/restore');
+        const r = d.restored || {};
+        alert('Restaurado: ' + (r.videos || 0) + ' videos, ' + (r.courses || 0) + ' cursos.');
+        loadBackups();
+    } catch (err) {
+        alert('Error restaurando: ' + err.message);
+    }
+}
+
+function downloadBackup(id) {
+    const url = '/api/admin/backups/' + id + '/download';
+    fetch(url, { headers: { Authorization: 'Bearer ' + TOKEN } })
+        .then(r => r.blob())
+        .then(blob => {
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'backup_' + id + '.json';
+            document.body.appendChild(a); a.click(); a.remove();
+        })
+        .catch(err => alert('Error descargando: ' + err.message));
+}
+
+async function deleteBackup(id) {
+    if (!confirm('¿Eliminar esta copia de seguridad? No se puede deshacer.')) return;
+    try {
+        await api('DELETE', '/api/admin/backups/' + id);
+        loadBackups();
+    } catch (err) {
+        alert('Error eliminando: ' + err.message);
+    }
+}
+
+function restoreFromFile(input) {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+        try {
+            const payload = JSON.parse(reader.result);
+            if (!payload.catalog || !Array.isArray(payload.catalog.value)) {
+                throw new Error('El archivo no tiene el formato esperado (catalog.value).');
+            }
+            if (!confirm('¿Restaurar ' + payload.catalog.value.length + ' videos desde este archivo?')) { input.value = ''; return; }
+            const d = await api('POST', '/api/admin/backups/restore-upload', { payload });
+            const r = d.restored || {};
+            alert('Restaurado desde archivo: ' + (r.videos || 0) + ' videos, ' + (r.courses || 0) + ' cursos.');
+            loadBackups();
+        } catch (err) {
+            alert('Error: ' + err.message);
+        } finally { input.value = ''; }
+    };
+    reader.readAsText(file);
+}
+
+
 let _dashData       = [];   // cache para el filtro de búsqueda
 let _dashRefreshId  = null; // ID del setInterval
 

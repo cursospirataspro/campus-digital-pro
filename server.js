@@ -44,6 +44,7 @@ const { getPresignedUrl, listFiles, LOCAL_MODE } = require('./storage');
 const { processVideo }                       = require('./hls-processor');
 const db = require('./database');
 const sheets = require('./sheets-sync');
+const pgStore = require('./pg-store');
 const https = require('https');
 const http  = require('http');
 
@@ -58,6 +59,8 @@ const saveCatalog    = () => {}; // no-op: SQLite es transaccional
  * Sin límite de tamaño — guarda todos los videos.
  */
 function syncCatalogSeed() {
+    // Espejo a PostgreSQL (bóveda persistente) — independiente de la API de Render.
+    syncToPostgres();
     if (!RENDER_API_KEY || !RENDER_SERVICE_ID) return;
     try {
         const catalog = db.loadCatalog();
@@ -135,6 +138,141 @@ function syncDomainsSeed() {
             });
         }).on('error', e => console.error('[sync] GET error dominios:', e.message));
     } catch (e) { console.error('[sync] Error dominios:', e.message); }
+}
+
+// ================================================================
+//  PERSISTENCIA EN POSTGRESQL (bóveda que sobrevive a los redeploys)
+//  + COPIAS DE SEGURIDAD SEMANALES
+// ================================================================
+
+const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || 'https://campus-digital-pro.onrender.com').replace(/\/+$/, '');
+
+/** Estado completo actual para guardar/rehidratar desde PostgreSQL. */
+function buildSnapshot() {
+    return {
+        catalog:  db.loadCatalog(),
+        courses:  db.getAllCourses(),
+        modules:  db.getAllModules ? db.getAllModules() : [],
+        domains:  db.getAllowedDomains(),
+        students: db.getAllStudents(),
+    };
+}
+
+let _pgSyncTimer = null;
+/** Vuelca el estado a PostgreSQL (con debounce para no saturar en restauraciones masivas). */
+function syncToPostgres() {
+    if (!pgStore.isEnabled()) return;
+    if (_pgSyncTimer) clearTimeout(_pgSyncTimer);
+    _pgSyncTimer = setTimeout(async () => {
+        _pgSyncTimer = null;
+        try {
+            if (!pgStore.isReady()) return;
+            const snap = buildSnapshot();
+            await pgStore.saveLiveState(snap);
+            console.log(`[pg] Estado guardado: ${snap.catalog.length} videos, ${snap.courses.length} cursos`);
+        } catch (e) { console.error('[pg] syncToPostgres error:', e.message); }
+    }, 3000);
+}
+
+/**
+ * Construye una copia de seguridad con la MISMA estructura del archivo
+ * backup_render_*.json (catalog.value + courses con link_player).
+ */
+function buildBackupPayload() {
+    const catalog = db.loadCatalog();
+    const courses = db.getAllCourses();
+    const link = (id) => `${PUBLIC_BASE_URL}/?v=${id}`;
+
+    const value = catalog.map(v => ({
+        videoId:      v.videoId,
+        title:        v.title,
+        status:       v.status || 'ready',
+        segmentCount: v.segmentCount || 0,
+        keyId:        v.keyId || null,
+        error:        v.error || null,
+        uploadedAt:   v.uploadedAt,
+        sourceType:   v.sourceType || 'bunny',
+        bunnyUrl:     v.bunnyUrl || null,
+        courseId:     v.courseId || null,
+        sortOrder:    v.sortOrder || 0,
+        moduleId:     v.moduleId || null,
+        link_player:  link(v.videoId),
+    }));
+
+    const coursesOut = courses.map(c => {
+        const vids = catalog
+            .filter(v => v.courseId === c.id)
+            .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+        return {
+            id:          c.id,
+            nombre:      c.name,
+            autor:       c.author || '',
+            totalVideos: vids.length,
+            videos: vids.map((v, i) => ({
+                numero:            i + 1,
+                sortOrder:         v.sortOrder || 0,
+                videoId:           v.videoId,
+                titulo_original:   v.title,
+                link_player:       link(v.videoId),
+                link_original_hls: v.bunnyUrl || null,
+                sourceType:        v.sourceType || 'bunny',
+                status:            v.status || 'ready',
+                uploadedAt:        v.uploadedAt,
+            })),
+        };
+    });
+
+    return {
+        catalog:      { value },
+        exportedAt:   new Date().toISOString(),
+        totalVideos:  value.length,
+        totalCourses: coursesOut.length,
+        courses:      coursesOut,
+    };
+}
+
+/** Restaura una copia de seguridad (formato backup JSON) dentro de la base. */
+function restoreFromPayload(payload) {
+    const videos  = (payload && payload.catalog && payload.catalog.value) || [];
+    const courses = (payload && payload.courses) || [];
+    const result  = db.applySnapshot({ catalog: videos, courses });
+    syncToPostgres();
+    return result;
+}
+
+/** Crea una copia de seguridad y la guarda en PostgreSQL. */
+async function createBackupNow(kind = 'manual', label = '') {
+    const payload = buildBackupPayload();
+    const row = await pgStore.createBackup({
+        kind,
+        label: label || (kind === 'weekly' ? 'Automático semanal' : 'Manual'),
+        payload,
+    });
+    return { row, payload };
+}
+
+const WEEKLY_MS = 7 * 24 * 60 * 60 * 1000;
+let _weeklyRunning = false;
+/** Si pasó una semana desde la última copia automática, genera una nueva. */
+async function maybeWeeklyBackup() {
+    if (!pgStore.isReady() || _weeklyRunning) return;
+    _weeklyRunning = true;
+    try {
+        const last   = await pgStore.getConfig('last_weekly_backup_at');
+        const lastMs = last ? Date.parse(last) : 0;
+        if (Date.now() - lastMs >= WEEKLY_MS) {
+            const { row } = await createBackupNow('weekly');
+            if (row) {
+                await pgStore.setConfig('last_weekly_backup_at', new Date().toISOString());
+                await pgStore.pruneBackups('weekly', 12);
+                console.log(`[backup] Copia semanal creada (#${row.id}): ${row.total_videos} videos, ${row.total_courses} cursos`);
+            }
+        }
+    } catch (e) {
+        console.error('[backup] maybeWeeklyBackup error:', e.message);
+    } finally {
+        _weeklyRunning = false;
+    }
 }
 
 // ---- Alumnos: ahora en SQLite vía database.js ----
@@ -924,6 +1062,96 @@ app.post('/api/catalog/restore-bulk', requireAdmin, (req, res) => {
     }
     res.json({ ok: true, inserted, skipped });
 });
+
+// ================================================================
+//  COPIAS DE SEGURIDAD EN POSTGRESQL [ADMIN]
+//  Listar / crear / descargar / restaurar / eliminar copias.
+//  Las copias sobreviven a los redeploys porque viven en PostgreSQL.
+// ================================================================
+
+/** GET /api/admin/backups — Estado + lista de copias de seguridad */
+app.get('/api/admin/backups', requireAdmin, async (req, res) => {
+    if (!pgStore.isEnabled()) {
+        return res.json({ enabled: false, ready: false, backups: [], message: 'PostgreSQL no configurado (falta DATABASE_URL)' });
+    }
+    try {
+        const [backups, lastWeekly] = await Promise.all([
+            pgStore.listBackups(100),
+            pgStore.getConfig('last_weekly_backup_at'),
+        ]);
+        res.json({ enabled: true, ready: pgStore.isReady(), lastWeekly: lastWeekly || null, backups });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/** POST /api/admin/backups — Crea una copia de seguridad manual ahora */
+app.post('/api/admin/backups', requireAdmin, async (req, res) => {
+    if (!pgStore.isReady()) return res.status(503).json({ error: 'PostgreSQL no disponible' });
+    try {
+        const label = (req.body && req.body.label ? String(req.body.label) : '').slice(0, 120);
+        const { row } = await createBackupNow('manual', label);
+        if (!row) return res.status(500).json({ error: 'No se pudo crear la copia' });
+        res.status(201).json({ ok: true, backup: row });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/** GET /api/admin/backups/:id/download — Descarga el JSON completo de una copia */
+app.get('/api/admin/backups/:id/download', requireAdmin, async (req, res) => {
+    if (!pgStore.isReady()) return res.status(503).json({ error: 'PostgreSQL no disponible' });
+    try {
+        const row = await pgStore.getBackup(req.params.id);
+        if (!row) return res.status(404).json({ error: 'Copia no encontrada' });
+        const date = new Date(row.created_at).toISOString().slice(0, 10);
+        const fname = `backup_render_${row.total_videos}videos_${date}.json`;
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Content-Disposition', `attachment; filename="${fname}"`);
+        res.send(JSON.stringify(row.payload, null, 2));
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/** POST /api/admin/backups/:id/restore — Restaura una copia dentro de la base */
+app.post('/api/admin/backups/:id/restore', requireAdmin, async (req, res) => {
+    if (!pgStore.isReady()) return res.status(503).json({ error: 'PostgreSQL no disponible' });
+    try {
+        const row = await pgStore.getBackup(req.params.id);
+        if (!row) return res.status(404).json({ error: 'Copia no encontrada' });
+        const result = restoreFromPayload(row.payload);
+        res.json({ ok: true, restored: result });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/** POST /api/admin/backups/restore-upload — Restaura desde un JSON pegado/subido */
+app.post('/api/admin/backups/restore-upload', requireAdmin, (req, res) => {
+    try {
+        const payload = req.body && (req.body.payload || req.body);
+        if (!payload || !payload.catalog || !Array.isArray(payload.catalog.value)) {
+            return res.status(400).json({ error: 'Formato inválido: se esperaba { catalog: { value: [...] }, courses: [...] }' });
+        }
+        const result = restoreFromPayload(payload);
+        res.json({ ok: true, restored: result });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/** DELETE /api/admin/backups/:id — Elimina una copia de seguridad */
+app.delete('/api/admin/backups/:id', requireAdmin, async (req, res) => {
+    if (!pgStore.isReady()) return res.status(503).json({ error: 'PostgreSQL no disponible' });
+    try {
+        await pgStore.deleteBackup(req.params.id);
+        res.json({ ok: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 app.post('/api/catalog/add-bunny', requireAdmin, async (req, res) => {
     const { title, bunnyUrl } = req.body || {};
     if (!title || typeof title !== 'string') return res.status(400).json({ error: 'title requerido' });
@@ -2744,6 +2972,30 @@ app.listen(PORT, () => {
 
     // Hidratar desde Google Sheets en background — no bloquea el arranque
     (async () => {
+        try {
+            // 1) PostgreSQL es la fuente de verdad: rehidrata TODO antes que nada.
+            const pgOk = await pgStore.init();
+            if (pgOk) {
+                const live = await pgStore.loadLiveState();
+                if (live && ((live.catalog && live.catalog.length) || (live.courses && live.courses.length))) {
+                    db.applySnapshot(live);
+                    console.log('[startup] Rehidratado desde PostgreSQL (los datos sobreviven a los redeploys)');
+                } else {
+                    console.log('[startup] PostgreSQL vacío — se poblará con los datos actuales');
+                    syncToPostgres();
+                }
+                // Copia de seguridad semanal: revisar al arrancar y cada 6 horas.
+                setTimeout(maybeWeeklyBackup, 60_000);
+                setInterval(maybeWeeklyBackup, 6 * 60 * 60 * 1000);
+            } else if (pgStore.isEnabled()) {
+                console.warn('[startup] DATABASE_URL definido pero no se pudo conectar a PostgreSQL');
+            } else {
+                console.log('[startup] Sin DATABASE_URL — persistencia PostgreSQL desactivada');
+            }
+        } catch (err) {
+            console.error('[startup] Error inicializando PostgreSQL:', err.message);
+        }
+
         try {
             const sheetsOk = await sheets.init();
             if (sheetsOk) {
