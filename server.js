@@ -1365,6 +1365,100 @@ app.get('/api/courses/:id/videos', requireAdmin, (req, res) => {
     res.json({ videos });
 });
 
+/**
+ * GET /api/courses/:id/export-flat  [ADMIN]
+ * Exporta UN curso específico en formato JSON PLANO compatible con el
+ * importador de Base44:
+ *
+ *   { "course_title": "...", "episodes": [ { "title", "video_url", "duration_minutes" } ] }
+ *
+ * - Respeta el orden actual de las clases (sort_order).
+ * - video_url = enlace ESTABLE del reproductor de Render (no temporal).
+ * - No incluye claves, tokens ni secretos de Bunny/Render.
+ * - No crea módulos ni submódulos (versión plana v1).
+ *
+ * La respuesta incluye `meta` (vista previa + advertencias) y `data`
+ * (el JSON plano final listo para descargar).
+ */
+app.get('/api/courses/:id/export-flat', requireAdmin, (req, res) => {
+    const courseId = req.params.id;
+
+    // 1) El curso debe existir
+    const course = db.getCourseById(courseId);
+    if (!course) return res.status(404).json({ error: 'El curso no existe.' });
+
+    // 2) El curso debe tener título
+    const courseTitle = (course.name || '').trim();
+    if (!courseTitle) return res.status(400).json({ error: 'El curso no tiene título. Corrige el nombre antes de exportar.' });
+
+    // 3) El curso debe tener al menos una clase/episodio
+    const videos = db.getCatalogByCourse(courseId); // ya viene ordenado por sort_order ASC
+    if (!videos.length) return res.status(400).json({ error: 'El curso no tiene clases/episodios. No se exporta un archivo vacío.' });
+
+    // 4) Cada episodio debe tener título (regla estricta: bloquea la exportación)
+    const sinTitulo = videos.filter(v => !((v.title || '').trim())).length;
+    if (sinTitulo > 0) {
+        return res.status(400).json({
+            error: `Hay ${sinTitulo} clase(s) sin título. Corrígelas antes de exportar (cada episodio debe tener título).`,
+        });
+    }
+
+    // 5) Construir episodios en el mismo orden, con enlace ESTABLE de Render.
+    //    Un episodio se considera "con video" solo si está listo (status ready).
+    const link = (id) => `${PUBLIC_BASE_URL}/?v=${id}`;
+    let withVideoUrl = 0;
+    let withoutVideoUrl = 0;
+    const episodes = videos.map((v) => {
+        const ready = (v.status || '') === 'ready' && !!v.videoId;
+        const video_url = ready ? link(v.videoId) : '';
+        if (video_url) withVideoUrl++; else withoutVideoUrl++;
+        return {
+            title: (v.title || '').trim(),
+            video_url,
+            duration_minutes: 0, // Render no almacena duración → 0
+        };
+    });
+
+    // 6) Advertencias (no bloquean, pero se muestran antes de descargar)
+    const warnings = [];
+    if (withoutVideoUrl > 0) {
+        warnings.push(`Este curso tiene ${withoutVideoUrl} clase(s) sin video_url. Se exportarán, pero aparecerán sin video en el campus.`);
+    }
+
+    // 7) Nombre de archivo limpio basado en el curso
+    const slug = (s) => (s || '')
+        .toString()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // quita acentos
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 80);
+    const baseName = [slug(courseTitle), slug(course.author)].filter(Boolean).join('-') || 'curso';
+    const filename = `${baseName}.json`;
+
+    // 8) JSON plano final (SIN módulos, SIN datos sensibles)
+    const data = {
+        course_title: courseTitle,
+        episodes,
+    };
+
+    res.json({
+        ok: true,
+        meta: {
+            courseId,
+            course_title: courseTitle,
+            author: course.author || '',
+            totalEpisodes: episodes.length,
+            withVideoUrl,
+            withoutVideoUrl,
+            exportedAt: new Date().toISOString(),
+            filename,
+            warnings,
+        },
+        data,
+    });
+});
+
 /** POST /api/courses/move-video — Mover video a un curso (y opcionalmente a un módulo) */
 app.post('/api/courses/move-video', requireAdmin, (req, res) => {
     const { videoId, courseId, moduleId } = req.body || {};

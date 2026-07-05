@@ -484,6 +484,7 @@
                 <button class="btn-gear" onclick="openCreateCourseModal()">&#128218; Crear curso</button>
                 <button class="btn-gear" onclick="openDomainsModal()">&#9881; Dominios permitidos</button>
                 <button class="btn-gear" onclick="openBunnyImportModal()" style="color:#f97316;border-color:#f97316">&#128194; Importar desde Bunny</button>
+                <button class="btn-gear" onclick="openExportJsonModal()" style="color:#22c55e;border-color:#22c55e">&#11015;&#65039; Exportar JSON</button>
             </div>
 
             <!-- Vista de cursos (por defecto) -->
@@ -549,9 +550,50 @@
             </div>
         </div>
 
+        <!-- Modal: Exportar curso a JSON plano (Base44) -->
+        <div id="export-json-modal-bg" class="move-modal-bg" style="z-index:260">
+            <div class="move-modal" style="max-width:600px;max-height:90vh;overflow-y:auto">
+                <h3 style="margin-bottom:6px">&#11015;&#65039; Exportar curso a JSON</h3>
+                <p style="color:var(--c-muted);font-size:0.8rem;margin-bottom:14px">
+                    Genera un archivo JSON <b>plano</b> (sin m&#243;dulos) compatible con el importador de tu campus Base44.
+                    Selecciona un curso, revisa la vista previa y desc&#225;rgalo.
+                </p>
+
+                <div class="form-row">
+                    <label>Curso a exportar *</label>
+                    <select id="export-course-select" onchange="loadExportPreview()"
+                            style="width:100%;padding:9px;background:#111827;color:#e5e7eb;border:1px solid #374151;border-radius:6px">
+                        <option value="">— Selecciona un curso —</option>
+                    </select>
+                </div>
+
+                <div id="export-preview" style="display:none;margin-top:14px">
+                    <div class="card" style="background:#0f172a;border:1px solid #334155;padding:14px;border-radius:8px">
+                        <h4 style="margin:0 0 10px;font-size:0.95rem">Vista previa</h4>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:0.82rem">
+                            <div><span style="color:var(--c-muted)">Curso:</span> <b id="ep-title"></b></div>
+                            <div><span style="color:var(--c-muted)">Fecha:</span> <span id="ep-date"></span></div>
+                            <div><span style="color:var(--c-muted)">Total episodios:</span> <b id="ep-total"></b></div>
+                            <div><span style="color:var(--c-muted)">Con video:</span> <b id="ep-with" style="color:#22c55e"></b></div>
+                            <div><span style="color:var(--c-muted)">Sin video:</span> <b id="ep-without" style="color:#f97316"></b></div>
+                            <div><span style="color:var(--c-muted)">Archivo:</span> <span id="ep-file" style="font-family:monospace;font-size:0.75rem"></span></div>
+                        </div>
+                        <div id="ep-warnings" style="display:none;margin-top:12px;padding:10px;background:#422006;border:1px solid #a16207;border-radius:6px;color:#fde68a;font-size:0.8rem"></div>
+                    </div>
+                </div>
+
+                <div id="export-msg" style="font-size:0.82rem;margin-top:12px;display:none"></div>
+
+                <div style="display:flex;gap:8px;margin-top:16px">
+                    <button class="btn btn-red" id="export-download-btn" onclick="downloadExportJson()" disabled
+                            style="background:#16a34a;border-color:#16a34a">&#11015;&#65039; Descargar JSON</button>
+                    <button class="btn btn-ghost" onclick="closeExportJsonModal()">Cancelar</button>
+                </div>
+            </div>
+        </div>
+
         <!-- Modal: Gestionar módulos -->
-        <div id="modules-modal-bg" class="move-modal-bg" style="z-index:250">
-            <div class="move-modal" style="max-width:560px;max-height:90vh;overflow-y:auto">
+        <div id="modules-modal-bg" class="move-modal-bg" style="z-index:250">            <div class="move-modal" style="max-width:560px;max-height:90vh;overflow-y:auto">
                 <h3 style="margin-bottom:14px">&#128193; Gestionar M&#243;dulos</h3>
                 <p style="color:var(--c-muted);font-size:0.8rem;margin-bottom:14px">Crea, edita y elimina m&#243;dulos y subm&#243;dulos para organizar los videos del curso.</p>
 
@@ -1640,6 +1682,95 @@ async function saveRowOrder() {
     const rows = [...$('catalog-body').querySelectorAll('tr[data-videoid]')];
     const orders = rows.map((r, i) => ({ videoId: r.dataset.videoid, sortOrder: i + 1 }));
     try { await api('POST', '/api/courses/reorder', { orders }); } catch {}
+}
+
+// ================================================================
+//  EXPORTAR CURSO A JSON PLANO (Base44)
+// ================================================================
+let exportCurrentData = null; // { course_title, episodes:[...] }
+
+async function openExportJsonModal() {
+    exportCurrentData = null;
+    const sel = $('export-course-select');
+    const msg = $('export-msg');
+    msg.style.display = 'none'; msg.textContent = '';
+    $('export-preview').style.display = 'none';
+    $('export-download-btn').disabled = true;
+    sel.innerHTML = '<option value="">Cargando cursos...</option>';
+    $('export-json-modal-bg').classList.add('active');
+    try {
+        const data = await api('GET', '/api/courses');
+        const courses = data.courses || [];
+        allCoursesCache = courses;
+        let opts = '<option value="">— Selecciona un curso —</option>';
+        for (const c of courses) {
+            opts += `<option value="${esc(c.id)}">${esc(c.name)} (${c.videoCount || 0} clases)</option>`;
+        }
+        sel.innerHTML = opts;
+    } catch (err) {
+        sel.innerHTML = '<option value="">— Selecciona un curso —</option>';
+        msg.style.display = 'block'; msg.style.color = 'var(--c-error)';
+        msg.textContent = 'Error cargando cursos: ' + err.message;
+    }
+}
+
+function closeExportJsonModal() {
+    $('export-json-modal-bg').classList.remove('active');
+    exportCurrentData = null;
+}
+
+async function loadExportPreview() {
+    const id = $('export-course-select').value;
+    const msg = $('export-msg');
+    const prev = $('export-preview');
+    const btn = $('export-download-btn');
+    exportCurrentData = null;
+    btn.disabled = true;
+    msg.style.display = 'none'; msg.textContent = '';
+    prev.style.display = 'none';
+    if (!id) return;
+    try {
+        const res = await api('GET', `/api/courses/${id}/export-flat`);
+        const m = res.meta;
+        exportCurrentData = { data: res.data, filename: m.filename };
+        $('ep-title').textContent = m.course_title;
+        $('ep-date').textContent = fmtDate(m.exportedAt);
+        $('ep-total').textContent = m.totalEpisodes;
+        $('ep-with').textContent = m.withVideoUrl;
+        $('ep-without').textContent = m.withoutVideoUrl;
+        $('ep-file').textContent = m.filename;
+        const warnEl = $('ep-warnings');
+        if (m.warnings && m.warnings.length) {
+            warnEl.innerHTML = '&#9888;&#65039; ' + m.warnings.map(esc).join('<br>&#9888;&#65039; ');
+            warnEl.style.display = 'block';
+        } else {
+            warnEl.style.display = 'none';
+        }
+        prev.style.display = 'block';
+        btn.disabled = false;
+    } catch (err) {
+        msg.style.display = 'block'; msg.style.color = 'var(--c-error)';
+        msg.textContent = 'No se puede exportar: ' + err.message;
+    }
+}
+
+function downloadExportJson() {
+    if (!exportCurrentData) return;
+    // Si hay clases sin video, confirmar antes de descargar
+    const without = parseInt($('ep-without').textContent, 10) || 0;
+    if (without > 0) {
+        const ok = confirm(`Este curso tiene ${without} clase(s) sin video_url.\nSe exportarán, pero aparecerán sin video en el campus.\n\n¿Descargar de todos modos?`);
+        if (!ok) return;
+    }
+    const blob = new Blob([JSON.stringify(exportCurrentData.data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = exportCurrentData.filename || 'curso.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
 // Crear/editar curso
