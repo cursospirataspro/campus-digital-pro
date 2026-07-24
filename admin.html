@@ -2249,12 +2249,17 @@ function matchStructure(items, bunnyVideos, sortOffset) {
             });
         } else {
             const norm = normalizeTitle(item.name);
-            // Buscar mejor coincidencia en Bunny
-            let best = null, bestScore = 0;
-            for (const bv of bunnyVideos) {
-                const bNorm = normalizeTitle(bv.title);
-                const score = similarityScore(norm, bNorm);
-                if (score > bestScore) { bestScore = score; best = bv; }
+            const rawName = item.name.replace(/\.(mp4|m4v|mkv|mov|avi|wmv|webm|flv|ts|mpg|mpeg)$/i, '').trim().toLowerCase();
+            // Prioridad 1: título EXACTO en Bunny (evita confundir "2. Builder" con "2 - Builder")
+            let best = bunnyVideos.find(bv => bv.title.trim().toLowerCase() === rawName) || null;
+            let bestScore = best ? 1 : 0;
+            if (!best) {
+                // Prioridad 2: mejor coincidencia difusa
+                for (const bv of bunnyVideos) {
+                    const bNorm = normalizeTitle(bv.title);
+                    const score = similarityScore(norm, bNorm);
+                    if (score > bestScore) { bestScore = score; best = bv; }
+                }
             }
             const matched = bestScore > 0.4;
             result.push({
@@ -2276,12 +2281,16 @@ function similarityScore(a, b) {
     if (a === b) return 1;
     const shorter = a.length <= b.length ? a : b;
     if (shorter.length >= 5 && (a.includes(b) || b.includes(a))) return 0.85;
-    const aWords = new Set(a.split(' ').filter(w => w.length > 2));
-    const bWords = new Set(b.split(' ').filter(w => w.length > 2));
+    // Conservar tokens numéricos ("1", "12") — son críticos para distinguir
+    // "Operativa en vivo 1/2/3" o "12 de Abril" vs "19 de Abril".
+    const keep = w => w.length > 2 || /^\d+$/.test(w);
+    const aWords = new Set(a.split(' ').filter(keep));
+    const bWords = new Set(b.split(' ').filter(keep));
     let common = 0;
     for (const w of aWords) if (bWords.has(w)) common++;
     const total = Math.max(aWords.size, bWords.size);
-    return total > 0 ? common / total : 0;
+    // Cap 0.95: solo la igualdad exacta llega a 1, así el título exacto siempre gana
+    return total > 0 ? Math.min(common / total, 0.95) : 0;
 }
 
 function countMatches(items) {
