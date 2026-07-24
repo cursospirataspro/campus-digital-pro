@@ -2229,7 +2229,7 @@ function doMatching() {
 
 function normalizeTitle(str) {
     return str.toLowerCase()
-        .replace(/\.[^.]+$/, '')          // quitar extensión
+        .replace(/\.(mp4|m4v|mkv|mov|avi|wmv|webm|flv|ts|mpg|mpeg)$/i, '') // quitar solo extensiones de video conocidas
         .replace(/[_\-\[\]()\\.]+/g, ' ') // reemplazar separadores
         .replace(/\s+/g, ' ')
         .trim();
@@ -2274,7 +2274,8 @@ function matchStructure(items, bunnyVideos, sortOffset) {
 
 function similarityScore(a, b) {
     if (a === b) return 1;
-    if (a.includes(b) || b.includes(a)) return 0.85;
+    const shorter = a.length <= b.length ? a : b;
+    if (shorter.length >= 5 && (a.includes(b) || b.includes(a))) return 0.85;
     const aWords = new Set(a.split(' ').filter(w => w.length > 2));
     const bWords = new Set(b.split(' ').filter(w => w.length > 2));
     let common = 0;
