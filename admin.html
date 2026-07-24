@@ -2227,9 +2227,21 @@ function doMatching() {
     }, 300);
 }
 
+const VIDEO_EXT_RE = /\.(mp4|m4v|mkv|mov|avi|wmv|webm|flv|ts|mpg|mpeg)$/i;
+
+// Comparación "exacta" tolerante: sin extensión, sin acentos, sin dobles espacios
+function exactKey(str) {
+    return str.toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // quitar acentos (Introducción == Introduccion)
+        .replace(VIDEO_EXT_RE, '')                        // quitar extensión (Bunny a veces la conserva en el título)
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
 function normalizeTitle(str) {
     return str.toLowerCase()
-        .replace(/\.(mp4|m4v|mkv|mov|avi|wmv|webm|flv|ts|mpg|mpeg)$/i, '') // quitar solo extensiones de video conocidas
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // quitar acentos
+        .replace(VIDEO_EXT_RE, '')        // quitar solo extensiones de video conocidas
         .replace(/[_\-\[\]()\\.]+/g, ' ') // reemplazar separadores
         .replace(/\s+/g, ' ')
         .trim();
@@ -2249,9 +2261,10 @@ function matchStructure(items, bunnyVideos, sortOffset) {
             });
         } else {
             const norm = normalizeTitle(item.name);
-            const rawName = item.name.replace(/\.(mp4|m4v|mkv|mov|avi|wmv|webm|flv|ts|mpg|mpeg)$/i, '').trim().toLowerCase();
-            // Prioridad 1: título EXACTO en Bunny (evita confundir "2. Builder" con "2 - Builder")
-            let best = bunnyVideos.find(bv => bv.title.trim().toLowerCase() === rawName) || null;
+            const rawKey = exactKey(item.name);
+            // Prioridad 1: título EXACTO en Bunny (evita confundir "2. Builder" con "2 - Builder").
+            // exactKey tolera extensión en el título de Bunny y diferencias de acentos.
+            let best = bunnyVideos.find(bv => exactKey(bv.title) === rawKey) || null;
             let bestScore = best ? 1 : 0;
             if (!best) {
                 // Prioridad 2: mejor coincidencia difusa
